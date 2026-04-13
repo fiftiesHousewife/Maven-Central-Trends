@@ -9,10 +9,12 @@ A Go service that visualises Maven Central publishing activity over time, with a
 | `GET /` | Index page with links to all charts and API endpoints |
 | `GET /health` | Health check |
 | `GET /publishes-per-month` | Stacked area chart — version publishes per month by group |
-| `GET /new-groups-per-month` | Bar chart — new Maven Central groups created per month (clickable) |
+| `GET /new-groups-per-month` | Bar chart — new groups per month with AI milestone annotations |
 | `GET /api/publishes` | JSON data behind the versions chart |
 | `GET /api/new-groups` | JSON data behind the new groups chart |
-| `GET /api/new-groups/details?month=2025-07` | List of groups created in a specific month |
+| `GET /api/new-groups/details?month=2025-07` | Groups created in a specific month |
+| `GET /api/scan-progress` | Live scan progress (during background fetch) |
+| `GET /api/group-popularity?namespace=com.foo` | Popularity metrics for a namespace |
 | `GET /api/new-artifacts-today` | Count of new artifacts published today |
 
 ## Running
@@ -28,6 +30,8 @@ make run
 make build
 nohup ./bin/server > server.log 2>&1 &
 ```
+
+The server starts on `:8080`. On startup it begins background fetches to populate the data caches in `data/`. The first run takes some time (see data collection below); subsequent runs resume from cached data.
 
 ## Testing
 
@@ -56,40 +60,76 @@ npx playwright test tests/new-chart.spec.ts
 npx playwright test --headed
 ```
 
-The server starts on `:8080`. On startup it begins background fetches to populate the data caches. The first run takes some time (see data collection below); subsequent runs resume from cached data.
+## Data Source: deps.dev + repo1.maven.org
+
+Both charts use the same two data sources working together:
+
+### repo1.maven.org (Maven Central Repository)
+
+The actual Maven Central repository at `https://repo1.maven.org/maven2/`. Provides HTML directory listings of all groups, sub-groups, and artifacts. Used for **enumeration** — discovering what exists.
+
+- **URL pattern**: `https://repo1.maven.org/maven2/{group/path}/` (dots replaced with slashes)
+- **Example**: `https://repo1.maven.org/maven2/com/google/cloud/` lists 933 artifacts
+- **No authentication** required
+- **No rate limits** observed
+- **Always current** — this IS the repository, not an index
+- **Limitations**: No search, no timestamps, HTML only (requires scraping)
+
+### api.deps.dev (Google Open Source Insights)
+
+Google's open-source dependency database at `https://api.deps.dev/v3alpha/`. Returns complete version history with precise publish timestamps for any Maven package. Used for **timestamping** — knowing when things were published.
+
+- **URL pattern**: `https://api.deps.dev/v3alpha/systems/maven/packages/{groupId}%3A{artifactId}`
+- **Example**: Calling with `com.google.cloud%3Agoogle-cloud-storage` returns all 312 versions with `publishedAt` in RFC 3339 format (`2026-03-25T14:22:56Z`)
+- **No authentication** required
+- **No rate limits** observed — handles rapid sequential requests without throttling
+- **Complete history** — every version ever published, right up to today
+- **CORS enabled** with 1-hour cache headers
+- **Limitations**: No search or namespace enumeration (must know exact groupId:artifactId), returns 404 for parent directories that aren't real artifacts
+
+### Why this combination?
+
+repo1 tells us **what exists** (all groups, all artifacts), deps.dev tells us **when it was published** (precise timestamps per version). Neither can do both: repo1 has no timestamps, deps.dev has no enumeration. Together they provide complete, current, and accurate data.
+
+### Popularity metrics: central.sonatype.com
+
+For the interactive group drilldown, we lazy-load popularity data from the Sonatype Central Portal's internal browse API:
+
+- **Endpoint**: `POST https://central.sonatype.com/api/internal/browse/components`
+- **Fields used**: `dependentOnCount` (how many packages depend on this), `nsPopularityAppCount` (apps using this namespace)
+- **Fetched on demand** when a user expands a group in the drilldown, not during the scan
+- **Cached to disk** in `data/maven_popularity_cache.json` to avoid re-fetching
+- **Rate limited** — the portal returns 429 after ~100 rapid requests, so lazy loading is essential
+- **Undocumented internal API** — could change without notice
 
 ## How It Works
 
 ### Chart 1: Version Publishes Per Month (stacked area)
 
-Tracks how many versions 10 selected namespaces publish each month over 3 years.
-
-**Data sources:**
-- **repo1.maven.org** — directory listing scraped to enumerate all artifacts under each namespace (e.g. `repo1.maven.org/maven2/io/quarkus/` lists ~191 artifacts)
-- **api.deps.dev** (Google Open Source Insights) — called per artifact to retrieve every published version with its `publishedAt` timestamp
+Tracks how many versions 10 selected namespaces publish each month over 4 years.
 
 **Process:**
 1. For each namespace (e.g. `io.quarkus`), scrape repo1 to list all artifact names
-2. For each artifact, call `GET https://api.deps.dev/v3alpha/systems/maven/packages/{group}%3A{artifact}` to get all versions with dates
+2. For each artifact, call deps.dev to get all versions with `publishedAt` dates
 3. Bucket every version's publish date into months
-4. Cache results to `maven_series_cache.json`; on restart, skip namespaces that already have data
+4. Cache results to `data/maven_series_cache.json`; on restart, skip namespaces that already have data
 
 **Selected namespaces:** AWS SDK, Quarkus, Google Cloud, Spring Boot, Eclipse Jetty, LangChain4j, OpenTelemetry, Testcontainers, Azure SDK, Micronaut
 
-### Chart 2: New Groups Per Month (bar chart)
+### Chart 2: New Groups Per Month (bar chart, ECharts)
 
-Counts how many entirely new group namespaces (e.g. `ai.agentcord`) first appeared on Maven Central each month. This measures whether AI coding tools are driving more people to publish new libraries.
-
-**Data sources:** Same as above (repo1 + deps.dev)
+Counts how many entirely new group namespaces (e.g. `ai.agentcord`) first appeared on Maven Central each month. Measures whether AI coding tools are driving more people to publish new libraries.
 
 **Process:**
 1. Scrape repo1 top-level directories for 26 prefixes (`ai/`, `com/`, `dev/`, `io/`, `org/`, etc.) to enumerate ~23,000 group namespaces
 2. For each group, list its artifacts on repo1, pick the first one, and call deps.dev to find the earliest version's `publishedAt` date — this is when the group first appeared
 3. Bucket each group's creation date into months
-4. Store both counts (`maven_new_cache.json`) and group details with artifact names (`maven_new_groups_cache.json`)
-5. The chart is interactive — click a bar to see the actual groups created that month
+4. Store counts and group details (name, first artifact, artifact count, last updated)
+5. The chart is interactive — click a bar to see groups created that month, grouped by prefix, with lazy-loaded popularity data
 
-**Colour coding:** Blue bars = pre-2024, green bars = 2024 onwards (AI coding tools era). A vertical annotation marks the boundary.
+**Milestone annotations** mark key AI model and tool releases (GPT-4, Claude models, Cursor, Windsurf, Claude Code, etc.) as vertical dashed lines with labels.
+
+**3-month moving average trend line** shown in amber to highlight the overall trajectory.
 
 ### Partial Month Handling
 
@@ -97,75 +137,56 @@ The current month is excluded from both charts unless it's the 30th or 31st, to 
 
 ### Cache & Resume
 
-Both fetchers write intermediate results to JSON cache files. On restart:
-- The versions fetcher skips namespaces that already have data
-- The new groups fetcher skips entirely if the cache is populated
-- Cache files: `maven_series_cache.json`, `maven_new_cache.json`, `maven_new_groups_cache.json`
+All data is cached in `data/` (gitignored). On restart:
+- The versions fetcher skips namespaces that already have data in the cache
+- The new groups fetcher tracks completed prefixes in `data/maven_scan_progress.json` and resumes from where it left off
+- Already-cached group IDs are checked before making any API calls, so re-scanning a prefix is fast
+- Cache is written every 25 new groups to minimise data loss on crashes
+- The `/api/scan-progress` endpoint exposes live scan state
+
+| Cache file | Purpose |
+|------------|---------|
+| `data/maven_series_cache.json` | Version counts per month per namespace |
+| `data/maven_new_groups_cache.json` | Group details keyed by month |
+| `data/maven_new_cache.json` | Aggregated month counts (derived from groups cache) |
+| `data/maven_scan_progress.json` | Which prefixes have been fully scanned |
+| `data/maven_popularity_cache.json` | Cached popularity metrics from Central Portal |
 
 ## Other Approaches Attempted
 
-Several data sources were tried before settling on the deps.dev + repo1 combination.
+Several data sources were evaluated before settling on deps.dev + repo1. All had significant limitations:
 
-### Maven Central Solr Search API (`search.maven.org/solrsearch/select`)
+| Source | Data Current? | Historical? | Namespace Filter? | Rate Limits | Verdict |
+|--------|:---:|:---:|:---:|:---:|---------|
+| **Solr Search API** (`search.maven.org`) | Only for `org.apache.*` | Yes (pre-June 2025) | Wildcard `g:prefix.*` | Aggressive (returns HTML) | Index stale for most groups after June 2025 |
+| **Central Portal Components** (`central.sonatype.com`) | Yes | No (latest version only) | Exact namespace | 429 after ~100 requests | Cannot query historical time ranges |
+| **Central Portal Versions** | Yes | Broken sort | Exact namespace | Same as above | Sort by `publishedDate` returns random order |
+| **Hybrid Solr + Central Portal** | Partial | Partial | Both | Both | 9-month gap between Solr coverage and Portal usefulness |
+| **mvnrepository.com** | Yes (website) | Yes (website) | N/A | HTTP 403 for all API calls | No programmatic access |
+| **libraries.io** | Lags behind | Unreliable timestamps | Requires API key | Auth required | Maven data quality too low |
+| **repo1.maven.org alone** | Yes | No timestamps | Manual path traversal | None | No publish dates, only directory listings |
+| **deps.dev alone** | Yes | Yes | No enumeration | None observed | Cannot discover what exists, only look up known packages |
+| **deps.dev + repo1** | **Yes** | **Yes** | **Via repo1 scraping** | **None observed** | **Chosen approach** |
 
-The original approach. Supports time-range queries on the `gav` core using epoch millisecond timestamps:
+### Solr Search API details
+
+The most promising initial approach. Supports time-range queries on the `gav` core:
 
 ```
-GET https://search.maven.org/solrsearch/select?q=timestamp:[START TO END] AND g:org.apache.*&core=gav&rows=0&wt=json
+GET https://search.maven.org/solrsearch/select?q=timestamp:[1743379200000 TO 1743984000000] AND g:org.apache.*&core=gav&rows=0&wt=json
 ```
 
-**Problems:**
-- The Solr index is **severely stale for most groups after June 2025**. Only `org.apache.*` artifacts are indexed up to date. All other namespaces (Google Cloud, Spring, Eclipse, etc.) stop at mid-2025.
-- The `ga` core's `timestamp` field reflects the last update, not creation date, making it useless for finding when artifacts were first published.
-- The `ga` core doesn't support filtering by `versionCount` to find new artifacts.
-- Rate limiting returns HTML instead of JSON, causing silent failures (counts appear as 0 instead of errors).
-- Maximum 20 rows per page, making it impractical to page through large result sets for deduplication.
+Key issues discovered:
+- The `timestamp` field uses epoch milliseconds (not ISO dates as the docs imply)
+- The `ga` core's timestamp reflects last update, not creation — useless for finding new artifacts
+- The index stopped being updated for most groups around June 2025 (only `org.apache.*` continues)
+- Rate limiting returns the full Maven Central HTML page instead of JSON, causing silent parse failures where counts appear as 0 rather than errors
+- Maximum 20 rows per page with no server-side grouping, making deduplication of ~50k GAVs per week impractical
 
-**Verdict:** Reliable for historical data (pre-June 2025) for all groups, and current data for Apache-prefixed groups only. Not viable as a sole data source.
+### Central Portal API details
 
-### Sonatype Central Portal API (`central.sonatype.com/api/internal/browse/`)
+The newer Sonatype Central Portal at `central.sonatype.com` has an undocumented internal API:
 
-The newer Maven Central portal has an undocumented internal API.
-
-**Components endpoint** (`POST /api/internal/browse/components`):
-- Supports namespace filtering and sort by `publishedDate`
-- Returns the **latest version** timestamp per component, not historical data
-- Cannot answer "what was published in October 2024" because it only knows each component's current state
-- Max page size of 20, aggressive rate limiting (429 after ~100 rapid requests, 60-90s cooldown)
-
-**Versions endpoint** (`GET /api/internal/browse/component/versions`):
-- Returns individual versions with `publishedEpochMillis`
-- Sort by `publishedDate` is **broken** — results come back in random order regardless of sort parameters
-- Namespace-only queries also return random-ordered results
-
-**Verdict:** Has current data but cannot query historical time ranges. Rate limits make it impractical for large-scale enumeration. Being an internal API, it could break without notice.
-
-### Hybrid Approach (Solr + Central Portal)
-
-Attempted using Solr for pre-June 2025 data and Central Portal for recent months. The cutoff was set at June 2025 based on when each group's Solr index stopped updating.
-
-**Problems:**
-- Central Portal can only count components whose **latest** version was published in the target month — for historical months, all components have newer timestamps so the count is always 0
-- Only works for the current month, creating a ~9-month gap between Solr coverage and Central Portal usefulness
-
-### mvnrepository.com
-
-Returns HTTP 403 for all programmatic requests. No public API exists.
-
-### libraries.io
-
-Requires API key authentication. Maven data historically lags behind and does not reliably track publish dates at the version level.
-
-### deps.dev + repo1 (current approach)
-
-Chosen because:
-- **Complete data**: deps.dev has every version ever published with precise timestamps, right up to today
-- **No authentication**: Both APIs are free and keyless
-- **No rate limits observed**: deps.dev handles rapid sequential requests without throttling
-- **Accurate timestamps**: `publishedAt` in RFC 3339 format, not epoch milliseconds subject to timezone bugs
-- **Simple enumeration**: repo1 directory listings provide a reliable source of truth for what exists
-
-**Trade-offs:**
-- Requires one HTTP call per artifact to deps.dev (~934 calls for `com.google.cloud` alone)
-- repo1 directory entries sometimes include parent directories that aren't real artifacts (produce 404s from deps.dev)
-- First full scan of ~23,000 groups takes significant time; cached results serve instantly
+- **Components endpoint** (`POST /api/internal/browse/components`): Returns components sorted by `publishedDate`, but this is the latest version's date — not the creation date. For a query "what was published in October 2024", all components have newer timestamps (they've been updated since), so the count is always 0 for historical months.
+- **Versions endpoint** (`GET /api/internal/browse/component/versions`): Returns individual versions with `publishedEpochMillis`, but sort by `publishedDate` is broken — results come back in seemingly random order regardless of sort parameters.
+- Both endpoints cap at 20 results per page and return 429 after approximately 100 rapid requests with a 60-90 second cooldown.
