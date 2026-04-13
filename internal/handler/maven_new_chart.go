@@ -251,6 +251,12 @@ function update() {
             sp.prefix_done.toLocaleString() + '/' + sp.prefix_total.toLocaleString() +
             ' (' + pct + '%) — ' +
             sp.completed_prefixes + '/' + sp.total_prefixes + ' prefixes complete';
+        } else if (sp.enrichment_phase) {
+          const pct = sp.enrichment_total > 0 ? Math.round(sp.enrichment_done / sp.enrichment_total * 100) : 0;
+          document.getElementById('scan-progress').textContent =
+            'Enriching: ' + sp.enrichment_phase + ' — ' +
+            sp.enrichment_done.toLocaleString() + '/' + sp.enrichment_total.toLocaleString() +
+            ' (' + pct + '%)';
         } else {
           document.getElementById('scan-progress').textContent = '';
         }

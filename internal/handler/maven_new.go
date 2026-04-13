@@ -36,6 +36,9 @@ type scanState struct {
 	TotalPrefixes    int    `json:"total_prefixes"`
 	TotalGroupsFound int    `json:"total_groups_found"`
 	Scanning         bool   `json:"scanning"`
+	EnrichmentPhase  string `json:"enrichment_phase"`
+	EnrichmentDone   int    `json:"enrichment_done"`
+	EnrichmentTotal  int    `json:"enrichment_total"`
 }
 
 var scanStatus = &scanState{TotalPrefixes: len(prefixes)}

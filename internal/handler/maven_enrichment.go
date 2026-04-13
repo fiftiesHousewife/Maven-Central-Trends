@@ -137,9 +137,110 @@ func StartEnrichment() {
 		<-fetchNewDone
 
 		slog.Info("starting background enrichment")
+		enrichWithDepsDevDetail()
 		enrichWithOSV()
 		enrichWithPortal()
 	}()
+}
+
+func enrichWithDepsDevDetail() {
+	groups := loadGroupsCache()
+	total := 0
+	enriched := 0
+	skipped := 0
+
+	for _, gs := range groups {
+		total += len(gs)
+	}
+
+	scanStatus.mu.Lock()
+	scanStatus.EnrichmentPhase = "deps.dev detail"
+	scanStatus.EnrichmentTotal = total
+	scanStatus.EnrichmentDone = 0
+	scanStatus.mu.Unlock()
+
+	slog.Info("deps.dev detail enrichment starting", "total_groups", total)
+
+	updated := false
+	count := 0
+	for month, gs := range groups {
+		for i, g := range gs {
+			count++
+
+			// Skip if already enriched (has version count)
+			if g.TotalVersions > 0 {
+				skipped++
+				continue
+			}
+
+			// Need the first artifact to look up
+			if g.FirstArtifact == "" {
+				continue
+			}
+
+			// Get package info from deps.dev for version count
+			pkg := fmt.Sprintf("%s:%s", g.GroupID, g.FirstArtifact)
+			u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
+				urlEncode(pkg))
+
+			resp, err := httpClient.Get(u)
+			if err != nil {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+
+			if resp.StatusCode != 200 {
+				resp.Body.Close()
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			var result depsDevResponse
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				resp.Body.Close()
+				continue
+			}
+			resp.Body.Close()
+
+			groups[month][i].TotalVersions = len(result.Versions)
+
+			// Get version detail for latest version
+			if len(result.Versions) > 0 {
+				latest := result.Versions[len(result.Versions)-1]
+				if latest.VersionKey.Version != "" {
+					detail, err := fetchVersionDetail(g.GroupID, g.FirstArtifact, latest.VersionKey.Version)
+					if err == nil {
+						if len(detail.Licenses) > 0 {
+							groups[month][i].License = detail.Licenses[0]
+						}
+						groups[month][i].SourceRepo = extractSourceRepo(detail)
+					}
+				}
+			}
+
+			updated = true
+			enriched++
+
+			scanStatus.mu.Lock()
+			scanStatus.EnrichmentDone = count
+			scanStatus.mu.Unlock()
+
+			if count%100 == 0 {
+				slog.Info("deps.dev detail progress", "done", count, "of", total, "enriched", enriched, "skipped", skipped)
+				if updated {
+					writeGroupsCache(groups)
+					updated = false
+				}
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	if updated {
+		writeGroupsCache(groups)
+	}
+	slog.Info("deps.dev detail enrichment complete", "total", total, "enriched", enriched, "skipped", skipped)
 }
 
 func enrichWithOSV() {
@@ -150,6 +251,12 @@ func enrichWithOSV() {
 	for _, gs := range groups {
 		total += len(gs)
 	}
+
+	scanStatus.mu.Lock()
+	scanStatus.EnrichmentPhase = "OSV CVEs"
+	scanStatus.EnrichmentTotal = total
+	scanStatus.EnrichmentDone = 0
+	scanStatus.mu.Unlock()
 
 	slog.Info("OSV enrichment starting", "total_groups", total)
 
@@ -178,6 +285,10 @@ func enrichWithOSV() {
 				enriched++
 				slog.Info("CVEs found", "group", g.GroupID, "cves", cveCount, "severity", maxSev)
 			}
+
+			scanStatus.mu.Lock()
+			scanStatus.EnrichmentDone = count
+			scanStatus.mu.Unlock()
 
 			if count%100 == 0 {
 				slog.Info("OSV enrichment progress", "done", count, "of", total, "enriched", enriched)
@@ -226,6 +337,12 @@ func enrichWithPortal() {
 		slog.Info("Central Portal enrichment: all groups already cached")
 		return
 	}
+
+	scanStatus.mu.Lock()
+	scanStatus.EnrichmentPhase = "Central Portal"
+	scanStatus.EnrichmentTotal = len(remaining)
+	scanStatus.EnrichmentDone = 0
+	scanStatus.mu.Unlock()
 
 	slog.Info("Central Portal enrichment starting", "remaining", len(remaining), "total", len(groupIDs))
 
@@ -280,6 +397,10 @@ func enrichWithPortal() {
 		popCache[id] = info
 		popMu.Unlock()
 
+		scanStatus.mu.Lock()
+		scanStatus.EnrichmentDone = i + 1
+		scanStatus.mu.Unlock()
+
 		if (i+1)%50 == 0 {
 			savePopularityCache()
 			slog.Info("Portal enrichment progress", "done", i+1, "of", len(remaining))
@@ -289,5 +410,11 @@ func enrichWithPortal() {
 	}
 
 	savePopularityCache()
+	scanStatus.mu.Lock()
+	scanStatus.EnrichmentPhase = ""
+	scanStatus.EnrichmentDone = 0
+	scanStatus.EnrichmentTotal = 0
+	scanStatus.mu.Unlock()
+
 	slog.Info("Central Portal enrichment complete", "enriched", len(remaining))
 }
