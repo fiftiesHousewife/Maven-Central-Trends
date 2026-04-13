@@ -26,7 +26,7 @@ type centralBrowseResponse struct {
 	TotalResultCount int `json:"totalResultCount"`
 }
 
-const popularityCacheFile = "maven_popularity_cache.json"
+const popularityCacheFile = "data/maven_popularity_cache.json"
 
 var (
 	popMu    sync.RWMutex

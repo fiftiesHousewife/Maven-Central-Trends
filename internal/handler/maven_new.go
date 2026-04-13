@@ -20,9 +20,9 @@ var prefixes = []string{
 	"org", "pl", "run", "se", "sh", "so", "tech", "top", "uk", "xyz",
 }
 
-const newCacheFile = "maven_new_cache.json"
-const groupsCacheFile = "maven_new_groups_cache.json"
-const scanProgressFile = "maven_scan_progress.json"
+const newCacheFile = "data/maven_new_cache.json"
+const groupsCacheFile = "data/maven_new_groups_cache.json"
+const scanProgressFile = "data/maven_scan_progress.json"
 
 // --- Scan progress tracking (package-level, goroutine-safe) ---
 

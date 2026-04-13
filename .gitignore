@@ -27,14 +27,16 @@ Thumbs.db
 # Environment
 .env
 
+# Claude
+.claude/
+
 # Node
 node_modules/
 package-lock.json
 
-# Cache files (regenerated at runtime)
-maven_*.json
-
-# Server logs
+# Data and logs (regenerated at runtime)
+data/
+logs/
 server.log
 
 # Playwright

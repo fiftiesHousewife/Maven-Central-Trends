@@ -34,7 +34,7 @@ type monthCount struct {
 	Groups map[string]int `json:"groups"`
 }
 
-const cacheFile = "maven_series_cache.json"
+const cacheFile = "data/maven_series_cache.json"
 
 var (
 	fetchOnce sync.Once
