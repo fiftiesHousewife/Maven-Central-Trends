@@ -32,6 +32,7 @@ func run() error {
 
 	handler.StartFetch()
 	handler.StartNewFetch()
+	handler.StartEnrichment()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handler.Index)

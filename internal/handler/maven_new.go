@@ -70,6 +70,11 @@ type groupInfo struct {
 	FirstPublished string `json:"first_published"`
 	ArtifactCount  int    `json:"artifact_count"`
 	LastUpdated    string `json:"last_updated"`
+	TotalVersions  int    `json:"total_versions,omitempty"`
+	License        string `json:"license,omitempty"`
+	SourceRepo     string `json:"source_repo,omitempty"`
+	CVECount       int    `json:"cve_count,omitempty"`
+	MaxCVESeverity string `json:"max_cve_severity,omitempty"`
 }
 
 type publishInfo struct {
@@ -77,6 +82,9 @@ type publishInfo struct {
 	LastUpdated    time.Time
 	FirstArtifact  string
 	ArtifactCount  int
+	TotalVersions  int
+	License        string
+	SourceRepo     string
 }
 
 // --- Dedup ---
@@ -210,12 +218,27 @@ func firstPublishInfo(groupID string) (publishInfo, error) {
 					last = t
 				}
 			}
-			return publishInfo{
+			info := publishInfo{
 				FirstPublished: first,
 				LastUpdated:    last,
 				FirstArtifact:  art,
 				ArtifactCount:  artCount,
-			}, nil
+				TotalVersions:  len(result.Versions),
+			}
+
+			// Fetch version detail for latest version (license, source repo)
+			latestVersion := lastV.VersionKey.Version
+			if latestVersion != "" {
+				detail, err := fetchVersionDetail(groupID, art, latestVersion)
+				if err == nil {
+					if len(detail.Licenses) > 0 {
+						info.License = detail.Licenses[0]
+					}
+					info.SourceRepo = extractSourceRepo(detail)
+				}
+			}
+
+			return info, nil
 		}
 	}
 	return publishInfo{}, fmt.Errorf("no publish date found for %s (tried %d of %d artifacts)", groupID, tried, artCount)
@@ -436,6 +459,9 @@ func fetchNewGroups() {
 				FirstPublished: info.FirstPublished.Format("2006-01-02"),
 				ArtifactCount:  info.ArtifactCount,
 				LastUpdated:    info.LastUpdated.Format("2006-01-02"),
+				TotalVersions:  info.TotalVersions,
+				License:        info.License,
+				SourceRepo:     info.SourceRepo,
 			})
 			cachedIDs[groupID] = true
 			newInPrefix++

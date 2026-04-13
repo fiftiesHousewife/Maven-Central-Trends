@@ -61,6 +61,18 @@ const newChartHTML2 = `<!DOCTYPE html>
     font-size: 0.75rem; color: #94a3b8;
   }
   .group-item .meta .label { color: #64748b; }
+  .group-item .badges { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .group-item .badge {
+    display: inline-block; font-size: 0.7rem; padding: 1px 6px;
+    border-radius: 3px; background: #334155; color: #94a3b8;
+    text-decoration: none; white-space: nowrap;
+  }
+  .group-item .badge.license { background: #1e3a5f; color: #60a5fa; }
+  .group-item .badge.cve-high { background: #7f1d1d; color: #fca5a5; }
+  .group-item .badge.cve-mod { background: #78350f; color: #fcd34d; }
+  .group-item .badge.repo { background: #1e293b; color: #64748b; border: 1px solid #334155; }
+  .group-item .badge.repo:hover { color: #e2e8f0; border-color: #3b82f6; }
+  .group-item .meta .sep { color: #475569; margin: 0 0.15rem; }
   .group-item .popularity { color: #10b981; font-size: 0.75rem; min-height: 1em; }
 </style>
 </head>
@@ -102,18 +114,35 @@ const popCache = {};
 function renderGroup(g) {
   const ns = g.group_id.replace(/\./g, '/');
   const url = 'https://repo1.maven.org/maven2/' + ns + '/';
-  const meta = [];
-  meta.push('<span><span class="label">artifact:</span> ' + g.first_artifact + '</span>');
-  if (g.artifact_count > 0) meta.push('<span><span class="label">total:</span> ' + g.artifact_count + '</span>');
-  if (g.last_updated && g.last_updated !== g.first_published) {
-    meta.push('<span><span class="label">updated:</span> ' + g.last_updated + '</span>');
+
+  // Badges row
+  const badges = [];
+  if (g.total_versions > 0) badges.push('<span class="badge">' + g.total_versions + ' versions</span>');
+  if (g.license) badges.push('<span class="badge license">' + g.license + '</span>');
+  if (g.cve_count > 0) {
+    const sevClass = (g.max_cve_severity === 'CRITICAL' || g.max_cve_severity === 'HIGH') ? 'cve-high' : 'cve-mod';
+    badges.push('<span class="badge ' + sevClass + '">' + g.cve_count + ' CVE' + (g.cve_count > 1 ? 's' : '') + ' (' + g.max_cve_severity + ')</span>');
   }
+  if (g.source_repo) {
+    const repoName = g.source_repo.replace('https://github.com/', '');
+    badges.push('<a class="badge repo" href="' + g.source_repo + '" target="_blank">' + repoName + '</a>');
+  }
+
+  // Meta row
+  const meta = [];
+  meta.push('<span>' + g.first_artifact + '</span>');
+  if (g.artifact_count > 0) meta.push('<span>' + g.artifact_count + ' artifacts</span>');
+  if (g.last_updated && g.last_updated !== g.first_published) {
+    meta.push('<span>updated ' + g.last_updated + '</span>');
+  }
+
   return '<div class="group-item" data-group-id="' + g.group_id + '">' +
     '<div class="top-row">' +
       '<a class="name" href="' + url + '" target="_blank">' + g.group_id + '</a>' +
       '<span class="date">' + g.first_published + '</span>' +
     '</div>' +
-    '<div class="meta">' + meta.join('') + '</div>' +
+    (badges.length ? '<div class="badges">' + badges.join('') + '</div>' : '') +
+    '<div class="meta">' + meta.join('<span class="sep">&middot;</span>') + '</div>' +
     '<span class="popularity"></span>' +
   '</div>';
 }
@@ -238,13 +267,13 @@ function update() {
             formatter: m.label,
             position: 'end',
             rotate: 0,
-            fontSize: 8,
+            fontSize: 11,
             fontWeight: 'bold',
             color: m.color,
             backgroundColor: '#0f172a',
-            padding: [1, 3],
-            borderRadius: 2,
-            offset: [0, (i % 3) * 12],
+            padding: [2, 4],
+            borderRadius: 3,
+            offset: [0, (i % 3) * 16],
           },
           lineStyle: { color: m.color, type: 'dashed', width: 1, opacity: 0.4 },
         }));
