@@ -1,0 +1,333 @@
+package handler
+
+import "net/http"
+
+const newChartHTML2 = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maven Central — New Groups Per Month</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+  p#status { color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.25rem; }
+  p#scan-progress { color: #475569; font-size: 0.75rem; margin-bottom: 1rem; }
+  .chart-wrap { position: relative; width: 100%; max-width: 1200px; margin: 0 auto; }
+  #chart { width: 100%; height: 550px; }
+  #groups-panel {
+    margin-top: 1.5rem; max-width: 1200px; margin-left: auto; margin-right: auto;
+    display: none;
+  }
+  #groups-panel h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+  #groups-panel .close { float: right; cursor: pointer; color: #94a3b8; font-size: 1.2rem; }
+  #groups-panel .close:hover { color: #e2e8f0; }
+  .group-list { display: flex; flex-direction: column; gap: 0.5rem; }
+  .prefix-header {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #1e293b; border-radius: 6px; padding: 0.6rem 1rem;
+    cursor: pointer; user-select: none;
+  }
+  .prefix-header:hover { background: #334155; }
+  .prefix-name { color: #e2e8f0; font-weight: 600; font-size: 0.95rem; }
+  .prefix-items {
+    display: none; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 0.5rem; padding: 0.5rem 0 0.5rem 1rem;
+  }
+  .prefix-items.expanded { display: grid; }
+  .prefix-count { color: #64748b; font-size: 0.85rem; }
+  .group-item {
+    background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+    padding: 0.6rem 0.8rem; display: flex; flex-direction: column; gap: 0.25rem;
+    transition: border-color 0.15s;
+  }
+  .group-item:hover { border-color: #3b82f6; }
+  .group-item .top-row {
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .group-item .name {
+    color: #e2e8f0; font-weight: 600; font-size: 0.85rem;
+    text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .group-item .name:hover { color: #3b82f6; }
+  .group-item .date {
+    color: #64748b; font-size: 0.72rem; white-space: nowrap; margin-left: 0.5rem;
+  }
+  .group-item .meta {
+    display: flex; gap: 0.75rem; flex-wrap: wrap;
+    font-size: 0.75rem; color: #94a3b8;
+  }
+  .group-item .meta .label { color: #64748b; }
+  .group-item .popularity { color: #10b981; font-size: 0.75rem; min-height: 1em; }
+</style>
+</head>
+<body>
+<div class="chart-wrap">
+  <h1>New Maven Central Groups Created Per Month</h1>
+  <p id="status">Loading data… scanning Maven Central namespaces.</p>
+  <p id="scan-progress"></p>
+  <div id="chart"></div>
+</div>
+<div id="groups-panel">
+  <span class="close" onclick="document.getElementById('groups-panel').style.display='none'">&times;</span>
+  <h2 id="groups-title"></h2>
+  <div id="groups-list" class="group-list"></div>
+</div>
+<script>
+const chart = echarts.init(document.getElementById('chart'), 'dark');
+
+const milestones = [
+  { month: '2022-06', label: 'GitHub Copilot GA', color: '#06b6d4' },
+  { month: '2023-03', label: 'GPT-4', color: '#f59e0b' },
+  { month: '2023-07', label: 'Claude 2', color: '#8b5cf6' },
+  { month: '2024-03', label: 'Claude 3 Opus / Devin', color: '#8b5cf6' },
+  { month: '2024-06', label: 'Claude 3.5 Sonnet', color: '#8b5cf6' },
+  { month: '2024-08', label: 'Cursor AI', color: '#06b6d4' },
+  { month: '2024-10', label: 'Claude 3.5 Sonnet v2', color: '#8b5cf6' },
+  { month: '2025-01', label: 'Windsurf', color: '#06b6d4' },
+  { month: '2025-02', label: 'Claude 3.7 Sonnet', color: '#8b5cf6' },
+  { month: '2025-05', label: 'Sonnet 4 / Opus 4', color: '#8b5cf6' },
+  { month: '2025-08', label: 'Opus 4.1', color: '#8b5cf6' },
+  { month: '2025-09', label: 'Sonnet 4.5', color: '#8b5cf6' },
+  { month: '2025-10', label: 'Haiku 4.5', color: '#8b5cf6' },
+  { month: '2025-11', label: 'Opus 4.5 / Claude Code', color: '#8b5cf6' },
+  { month: '2026-03', label: 'Opus 4.6 / Sonnet 4.6', color: '#8b5cf6' },
+];
+
+const popCache = {};
+
+function renderGroup(g) {
+  const ns = g.group_id.replace(/\./g, '/');
+  const url = 'https://repo1.maven.org/maven2/' + ns + '/';
+  const meta = [];
+  meta.push('<span><span class="label">artifact:</span> ' + g.first_artifact + '</span>');
+  if (g.artifact_count > 0) meta.push('<span><span class="label">total:</span> ' + g.artifact_count + '</span>');
+  if (g.last_updated && g.last_updated !== g.first_published) {
+    meta.push('<span><span class="label">updated:</span> ' + g.last_updated + '</span>');
+  }
+  return '<div class="group-item" data-group-id="' + g.group_id + '">' +
+    '<div class="top-row">' +
+      '<a class="name" href="' + url + '" target="_blank">' + g.group_id + '</a>' +
+      '<span class="date">' + g.first_published + '</span>' +
+    '</div>' +
+    '<div class="meta">' + meta.join('') + '</div>' +
+    '<span class="popularity"></span>' +
+  '</div>';
+}
+
+function fetchPopularity(groupId) {
+  if (popCache[groupId]) return Promise.resolve(popCache[groupId]);
+  return fetch('/api/group-popularity?namespace=' + groupId)
+    .then(r => r.json())
+    .then(d => { popCache[groupId] = d; return d; })
+    .catch(() => null);
+}
+
+// IntersectionObserver to lazy-load popularity when groups scroll into view
+const popObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const groupId = entry.target.dataset.groupId;
+      if (groupId) {
+        fetchPopularity(groupId).then(d => {
+          const el = entry.target.querySelector('.popularity');
+          if (!d || !el || el.textContent) return;
+          const parts = [];
+          if (d.dependent_count > 0) parts.push(d.dependent_count.toLocaleString() + ' dependents');
+          if (d.app_count > 0) parts.push(d.app_count.toLocaleString() + ' apps');
+          if (parts.length) el.textContent = ' — ' + parts.join(', ');
+        });
+      }
+      popObserver.unobserve(entry.target);
+    }
+  });
+}, { rootMargin: '200px' });
+
+function togglePrefix(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('expanded');
+  if (el.classList.contains('expanded')) {
+    el.querySelectorAll('.group-item').forEach(item => {
+      popObserver.observe(item);
+    });
+  }
+}
+
+function showGroups(month) {
+  fetch('/api/new-groups/details?month=' + month)
+    .then(r => r.json())
+    .then(groups => {
+      if (!groups || groups.length === 0) {
+        document.getElementById('groups-title').textContent = month + ' — no group data yet';
+        document.getElementById('groups-list').innerHTML = '<p style="color:#94a3b8">Data still loading…</p>';
+      } else {
+        groups.sort((a, b) => a.group_id.localeCompare(b.group_id));
+        document.getElementById('groups-title').textContent = month + ' — ' + groups.length + ' new groups';
+
+        const byPrefix = {};
+        groups.forEach(g => {
+          const prefix = g.group_id.split('.')[0];
+          if (!byPrefix[prefix]) byPrefix[prefix] = [];
+          byPrefix[prefix].push(g);
+        });
+
+        const prefixes = Object.keys(byPrefix).sort((a, b) => byPrefix[b].length - byPrefix[a].length);
+        document.getElementById('groups-list').innerHTML = prefixes.map(prefix => {
+          const items = byPrefix[prefix];
+          const id = 'prefix-' + prefix;
+          return '<div class="prefix-group">' +
+            '<div class="prefix-header" onclick="togglePrefix(\'' + id + '\')">' +
+              '<span class="prefix-name">' + prefix + '.*</span>' +
+              '<span class="prefix-count">' + items.length + ' group' + (items.length !== 1 ? 's' : '') + '</span>' +
+            '</div>' +
+            '<div class="prefix-items" id="' + id + '">' +
+              items.map(renderGroup).join('') +
+            '</div>' +
+          '</div>';
+        }).join('');
+      }
+      document.getElementById('groups-panel').style.display = 'block';
+      document.getElementById('groups-panel').scrollIntoView({ behavior: 'smooth' });
+    });
+}
+
+chart.on('click', function(params) {
+  if (params.componentType === 'series') {
+    showGroups(params.name);
+  }
+});
+
+function update() {
+  fetch('/api/new-groups')
+    .then(r => {
+      if (r.status === 503) throw new Error('still fetching');
+      return r.json();
+    })
+    .then(data => {
+      const { months } = data;
+      const total = months.reduce((s, m) => s + m.new_groups, 0);
+
+      document.getElementById('status').textContent = total > 0
+        ? total.toLocaleString() + ' new groups discovered'
+        : 'Loading data…';
+
+      fetch('/api/scan-progress').then(r => r.json()).then(sp => {
+        if (sp.scanning) {
+          const pct = sp.prefix_total > 0 ? Math.round(sp.prefix_done / sp.prefix_total * 100) : 0;
+          document.getElementById('scan-progress').textContent =
+            'Scanning ' + sp.current_prefix + '/* — ' +
+            sp.prefix_done.toLocaleString() + '/' + sp.prefix_total.toLocaleString() +
+            ' (' + pct + '%) — ' +
+            sp.completed_prefixes + '/' + sp.total_prefixes + ' prefixes complete';
+        } else {
+          document.getElementById('scan-progress').textContent = '';
+        }
+      }).catch(() => {});
+
+      const labels = months.map(m => m.month);
+      const values = months.map(m => m.new_groups);
+
+      const markLines = milestones
+        .filter(m => labels.includes(m.month))
+        .map((m, i) => ({
+          xAxis: m.month,
+          label: {
+            formatter: m.label,
+            position: 'end',
+            rotate: 0,
+            fontSize: 8,
+            fontWeight: 'bold',
+            color: m.color,
+            backgroundColor: '#0f172a',
+            padding: [1, 3],
+            borderRadius: 2,
+            offset: [0, (i % 3) * 12],
+          },
+          lineStyle: { color: m.color, type: 'dashed', width: 1, opacity: 0.4 },
+        }));
+
+      // 3-month moving average for trend line
+      const window = 3;
+      const trend = values.map((v, i) => {
+        if (i < window - 1) return null;
+        let sum = 0;
+        for (let j = i - window + 1; j <= i; j++) sum += values[j];
+        return Math.round(sum / window);
+      });
+
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'axis',
+          formatter: params => {
+            let html = params[0].name;
+            params.forEach(p => {
+              if (p.value != null) {
+                html += '<br/>' + p.marker + ' ' + p.seriesName + ': ' + p.value.toLocaleString();
+              }
+            });
+            return html;
+          },
+        },
+        xAxis: {
+          type: 'category',
+          data: labels,
+          axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 },
+          axisLine: { lineStyle: { color: '#1e293b' } },
+        },
+        yAxis: {
+          type: 'value',
+          axisLabel: { color: '#64748b' },
+          splitLine: { lineStyle: { color: '#1e293b' } },
+        },
+        series: [{
+          name: 'New groups',
+          type: 'bar',
+          data: values.map((v, i) => ({
+            value: v,
+            itemStyle: { color: '#3b82f6' },
+          })),
+          markLine: {
+            symbol: 'none',
+            data: markLines,
+            silent: true,
+          },
+          barMaxWidth: 30,
+        }, {
+          name: '3-month trend',
+          type: 'line',
+          data: trend,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: { color: '#f59e0b', width: 2 },
+          z: 10,
+        }],
+        legend: {
+          show: true,
+          top: 5,
+          right: 20,
+          textStyle: { color: '#94a3b8', fontSize: 11 },
+        },
+        grid: { top: 50, bottom: 60, left: 50, right: 20 },
+      });
+
+      setTimeout(update, 60000);
+    })
+    .catch(() => {
+      setTimeout(update, 10000);
+    });
+}
+
+update();
+window.addEventListener('resize', () => chart.resize());
+</script>
+</body>
+</html>`
+
+func NewChart2(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(newChartHTML2))
+}
