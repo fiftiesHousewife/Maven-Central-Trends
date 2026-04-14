@@ -21,7 +21,7 @@ func TestIndex(t *testing.T) {
 		t.Errorf("Content-Type = %q, want text/html", ct)
 	}
 	body := rec.Body.String()
-	for _, link := range []string{"/publishes-per-month", "/new-groups-per-month", "/license-trends", "/artifact-trends", "/version-trends"} {
+	for _, link := range []string{"/new-groups-per-month", "/publishes-per-month", "/license-trends", "/artifact-trends", "/version-trends"} {
 		if !strings.Contains(body, link) {
 			t.Errorf("index page missing link to %s", link)
 		}
@@ -54,7 +54,7 @@ func TestChartPages(t *testing.T) {
 		handler http.HandlerFunc
 		mustContain string
 	}{
-		{"Chart", "/publishes-per-month", handler.Chart, "chart.js"},
+		{"Chart", "/publishes-per-month", handler.Chart, "echarts"},
 		{"NewChart2", "/new-groups-per-month", handler.NewChart2, "echarts"},
 		{"LicenseChart", "/license-trends", handler.LicenseChart, "license-trends"},
 		{"ArtifactChart", "/artifact-trends", handler.ArtifactChart, "growth"},

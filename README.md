@@ -8,21 +8,29 @@ A Go service that visualises Maven Central publishing activity over time, with a
 |----------|-------------|
 | `GET /` | Index page with links to all charts and API endpoints |
 | `GET /health` | Health check |
-| `GET /publishes-per-month` | Stacked area chart — version publishes per month for 10 selected namespaces |
-| `GET /new-groups-per-month` | Bar chart — new groups per month with AI milestones and one-and-done overlay |
-| `GET /license-trends` | Stacked bar — license distribution per month (from deps.dev enrichment) |
-| `GET /artifact-trends` | Bar + cumulative line — new artifacts per month across all groups |
-| `GET /version-trends` | Bar + cumulative line — version counts per month (from deps.dev enrichment) |
-| `GET /api/publishes` | JSON data behind the versions chart |
-| `GET /api/new-groups` | JSON data behind the new groups chart |
+| `GET /new-groups-per-month` | New groups per month with one-and-done overlay |
+| `GET /publishes-per-month` | New groups by prefix (stacked area, top 10 + Other) |
+| `GET /license-trends` | License distribution per month |
+| `GET /artifact-trends` | New artifacts per month with trend line |
+| `GET /version-trends` | Version counts per month with trend line |
+| `GET /cve-trends` | CVEs by severity per month |
+| `GET /source-repos` | Source repo presence over time |
+| `GET /popularity` | Popularity distribution + top 25 groups |
+| `GET /size-distribution` | Group size (artifact count) distribution over time |
+| `GET /api/new-groups` | New groups per month JSON |
 | `GET /api/new-groups/details?month=2025-07` | Groups created in a specific month |
 | `GET /api/scan-progress` | Live scan and enrichment progress |
-| `GET /api/group-popularity?namespace=com.foo` | Popularity metrics for a namespace |
-| `GET /api/new-artifacts-today` | Count of new artifacts published today (Solr) |
-| `GET /api/license-trends` | License distribution per month JSON |
-| `GET /api/one-and-done` | Single-version vs multi-version group counts per month |
-| `GET /api/growth` | New artifacts per month with cumulative totals |
-| `GET /api/version-trends` | Version counts per month with cumulative totals |
+| `GET /api/groups-by-prefix` | New groups by prefix per month |
+| `GET /api/license-trends` | License distribution per month |
+| `GET /api/one-and-done` | Single-version vs multi-version per month |
+| `GET /api/growth` | New artifacts per month |
+| `GET /api/version-trends` | Version counts per month |
+| `GET /api/cve-trends` | CVE stats per month |
+| `GET /api/source-repos` | Source repo presence per month |
+| `GET /api/popularity` | Popularity distribution + top groups |
+| `GET /api/size-distribution` | Group size distribution by month |
+| `GET /api/group-popularity?namespace=com.foo` | On-demand popularity for a namespace |
+| `GET /api/new-artifacts-today` | New artifacts today (Solr) |
 
 ## Running
 
@@ -74,31 +82,35 @@ All data is stored in a SQLite database at `data/maven.db` (WAL mode). Legacy JS
 | Table | Purpose |
 |-------|---------|
 | `groups` | All discovered Maven Central namespaces with enrichment data |
-| `version_publishes` | Monthly version counts for 10 selected namespaces |
 | `scan_progress` | Completed prefix scans for resume support |
 
 ### Background tasks
 
-Three goroutines start on boot:
+Two goroutines start on boot:
 
-1. **Version series fetch** — For 10 selected namespaces (AWS SDK, Spring Boot, etc.), scrape repo1 for artifacts, call deps.dev for version dates, bucket by month
-2. **New groups scan** — Enumerate 26 top-level prefixes on repo1, discover groups, call deps.dev for first-publish dates. Tracks completed prefixes for resume
-3. **Enrichment pipeline** — Runs after the scan completes, three sequential phases:
+1. **New groups scan** — Enumerate 26 top-level prefixes on repo1, discover groups, call deps.dev for first-publish dates. Tracks completed prefixes for resume
+2. **Enrichment pipeline** — Runs after the scan completes, three sequential phases:
    - **deps.dev detail**: Fetch license, source repo, total version count (100ms throttle)
-   - **OSV CVEs**: Query api.osv.dev for vulnerability data (100ms throttle)
+   - **OSV CVEs**: Query api.osv.dev for vulnerability data across up to 5 artifacts per group (100ms throttle)
    - **Central Portal**: Fetch popularity metrics from Sonatype (3s throttle, 60s backoff on 429)
 
 ### Charts
 
 All charts use a dark theme and include AI tool milestone annotations. All are clickable — click any bar to drill into the groups created that month.
 
-| Chart | Library | Data source |
-|-------|---------|-------------|
-| Version publishes (stacked area) | Chart.js | 10 selected namespaces via deps.dev |
-| New groups per month | ECharts | All 26 prefixes, with one-and-done stacked overlay |
-| License trends | ECharts | deps.dev enrichment (top 8 licenses + Other) |
-| Artifact trends | ECharts | All groups, outliers capped at 500 artifacts |
-| Version trends | ECharts | deps.dev enrichment, outliers capped at 500 versions |
+| Chart | Data source |
+|-------|-------------|
+| New groups per month | All 26 prefixes, with one-and-done stacked overlay |
+| New groups by prefix | Stacked area, top 10 prefixes + Other |
+| License trends | deps.dev enrichment (top 8 licenses + Other) |
+| Artifact trends | All groups, outliers capped at 500 |
+| Version trends | deps.dev enrichment, outliers capped at 500 |
+| CVE trends | OSV enrichment, severity breakdown per month |
+| Source repo presence | deps.dev enrichment, with/without repo stacked |
+| Popularity distribution | Portal enrichment, log-scale histogram + top 25 |
+| Group size distribution | Artifact count buckets per month |
+
+All charts use ECharts with a dark theme, AI tool milestone annotations, and click-to-detail drill-down panels.
 
 ## Data Sources
 
@@ -139,18 +151,7 @@ Popularity metrics from the Sonatype Central Portal's internal browse API.
 
 ## How It Works
 
-### Chart 1: Version Publishes Per Month (stacked area)
-
-Tracks how many versions 10 selected namespaces publish each month over 4 years.
-
-**Process:**
-1. For each namespace (e.g. `io.quarkus`), scrape repo1 to list all artifact names
-2. For each artifact, call deps.dev to get all versions with `publishedAt` dates
-3. Bucket every version's publish date into months, store in SQLite
-
-**Selected namespaces:** AWS SDK, Quarkus, Google Cloud, Spring Boot, Eclipse Jetty, LangChain4j, OpenTelemetry, Testcontainers, Azure SDK, Micronaut
-
-### Chart 2: New Groups Per Month (bar chart with one-and-done overlay)
+### New Groups Per Month (bar chart with one-and-done overlay)
 
 Counts how many new group namespaces first appeared each month. Bars are stacked: red = one-and-done (single version only), blue = active (2+ versions), grey = not yet enriched.
 
@@ -160,14 +161,18 @@ Counts how many new group namespaces first appeared each month. Bars are stacked
 3. Bucket by month; enrichment adds version counts for one-and-done classification
 4. Click any bar to see groups created that month, grouped by prefix, with lazy-loaded popularity data
 
-### Charts 3-5: Enrichment charts
+### Enrichment charts
 
-Built from the three enrichment phases:
-- **License trends**: Groups with deps.dev license data, top 8 licenses stacked per month
+Built from the three enrichment phases. All feature milestone annotations and click-to-detail:
+
+- **Groups by prefix**: Stacked area showing top 10 prefixes (com, org, io, dev, etc.) + Other
+- **License trends**: Top 8 licenses stacked per month, click any segment to filter
 - **Artifact trends**: Total artifacts per month across all groups (outliers capped at 500)
 - **Version trends**: Total versions per month from deps.dev enrichment (outliers capped at 500)
-
-All enrichment charts feature milestone annotations, 3-month moving averages, and click-to-detail.
+- **CVE trends**: Groups with known vulnerabilities by severity, % affected trend line
+- **Source repo presence**: % of groups linking to a source repository over time
+- **Popularity distribution**: Log-scale histogram of dependent counts + top 25 groups
+- **Group size distribution**: Artifact count buckets (1 / 2-5 / 6-50 / 50+) stacked per month
 
 ### Partial Month Handling
 

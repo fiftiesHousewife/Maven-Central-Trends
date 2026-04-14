@@ -194,34 +194,6 @@ func TestPortalEnrichment(t *testing.T) {
 	}
 }
 
-func TestVersionPublishes(t *testing.T) {
-	setupTestDB(t)
-
-	UpsertVersionPublish("io.quarkus", "2024-01", 15)
-	UpsertVersionPublish("io.quarkus", "2024-02", 20)
-	UpsertVersionPublish("com.google.cloud", "2024-01", 45)
-
-	// Update existing
-	UpsertVersionPublish("io.quarkus", "2024-01", 18)
-
-	months, err := VersionPublishes()
-	if err != nil {
-		t.Fatalf("VersionPublishes: %v", err)
-	}
-
-	m := make(map[string]map[string]int)
-	for _, vp := range months {
-		m[vp.Month] = vp.Groups
-	}
-
-	if m["2024-01"]["io.quarkus"] != 18 {
-		t.Errorf("io.quarkus 2024-01 = %d, want 18", m["2024-01"]["io.quarkus"])
-	}
-	if m["2024-01"]["com.google.cloud"] != 45 {
-		t.Errorf("com.google.cloud 2024-01 = %d, want 45", m["2024-01"]["com.google.cloud"])
-	}
-}
-
 func TestGroupByID(t *testing.T) {
 	setupTestDB(t)
 

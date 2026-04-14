@@ -25,10 +25,6 @@ func MigrateFromJSON(dataDir string) error {
 		slog.Warn("scan progress migration failed", "error", err)
 	}
 
-	if err := migrateVersionPublishes(filepath.Join(dataDir, "maven_series_cache.json")); err != nil {
-		slog.Warn("version publishes migration failed", "error", err)
-	}
-
 	if err := migratePopularity(filepath.Join(dataDir, "maven_popularity_cache.json")); err != nil {
 		slog.Warn("popularity migration failed (may not exist yet)", "error", err)
 	}
@@ -113,35 +109,6 @@ func migrateScanProgress(path string) error {
 		}
 	}
 	slog.Info("migrated scan progress", "prefixes", len(sp.CompletedPrefixes))
-	return nil
-}
-
-func migrateVersionPublishes(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	var cached struct {
-		Months []struct {
-			Month  string         `json:"month"`
-			Groups map[string]int `json:"groups"`
-		} `json:"months"`
-	}
-	if err := json.Unmarshal(data, &cached); err != nil {
-		return err
-	}
-
-	count := 0
-	for _, m := range cached.Months {
-		for ns, c := range m.Groups {
-			if err := UpsertVersionPublish(ns, m.Month, c); err != nil {
-				slog.Warn("failed to insert version publish", "ns", ns, "month", m.Month, "error", err)
-			}
-			count++
-		}
-	}
-	slog.Info("migrated version publishes", "rows", count)
 	return nil
 }
 

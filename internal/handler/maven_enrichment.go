@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/pippanewbold/maven-central-trends/internal/store"
@@ -236,21 +237,49 @@ func enrichWithOSV() {
 
 	enriched := 0
 	for i, g := range unenriched {
-		pkg := g.GroupID + ":" + g.FirstArtifact
-		cveCount, maxSev, err := queryOSV("https://api.osv.dev", pkg)
-		if err != nil {
-			slog.Debug("OSV query failed", "pkg", pkg, "error", err)
-			time.Sleep(200 * time.Millisecond)
-			continue
+		// Query up to 5 artifacts per group to catch CVEs across the namespace
+		artifacts := []string{g.FirstArtifact}
+		if g.ArtifactCount > 1 {
+			path := strings.ReplaceAll(g.GroupID, ".", "/")
+			if extra, err := listSubgroups(path); err == nil {
+				for _, a := range extra {
+					if a != g.FirstArtifact {
+						artifacts = append(artifacts, a)
+					}
+					if len(artifacts) >= 5 {
+						break
+					}
+				}
+			}
 		}
 
-		if err := store.UpdateOSVEnrichment(g.GroupID, cveCount, maxSev); err != nil {
+		totalCVEs := 0
+		bestSev := ""
+		seenIDs := make(map[string]bool)
+
+		for _, art := range artifacts {
+			pkg := g.GroupID + ":" + art
+			count, sev, err := queryOSV("https://api.osv.dev", pkg)
+			if err != nil {
+				continue
+			}
+			if count > 0 {
+				totalCVEs += count
+				if severityRank[sev] > severityRank[bestSev] {
+					bestSev = sev
+				}
+			}
+			_ = seenIDs // future: deduplicate by vuln ID
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		if err := store.UpdateOSVEnrichment(g.GroupID, totalCVEs, bestSev); err != nil {
 			slog.Warn("failed to update OSV enrichment", "group", g.GroupID, "error", err)
 		}
 
-		if cveCount > 0 {
+		if totalCVEs > 0 {
 			enriched++
-			slog.Info("CVEs found", "group", g.GroupID, "cves", cveCount, "severity", maxSev)
+			slog.Info("CVEs found", "group", g.GroupID, "cves", totalCVEs, "severity", bestSev)
 		}
 
 		scanStatus.mu.Lock()

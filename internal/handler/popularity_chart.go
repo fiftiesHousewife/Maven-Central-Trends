@@ -1,0 +1,139 @@
+package handler
+
+import "net/http"
+
+const popularityChartHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maven Central — Popularity Distribution</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+  p#status { color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.25rem; }
+  p#sub { color: #475569; font-size: 0.8rem; margin-bottom: 1rem; }
+  .chart-wrap { position: relative; width: 100%; max-width: 1200px; margin: 0 auto; }
+  #chart { width: 100%; height: 400px; }
+  #top-list { max-width: 1200px; margin: 2rem auto 0; }
+  #top-list h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+  .top-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0.5rem; }
+  .top-item {
+    background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+    padding: 0.6rem 0.8rem; display: flex; justify-content: space-between; align-items: center;
+    transition: border-color 0.15s;
+  }
+  .top-item:hover { border-color: #3b82f6; }
+  .top-item .name {
+    color: #e2e8f0; font-weight: 600; font-size: 0.85rem;
+    text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .top-item .name:hover { color: #3b82f6; }
+  .top-item .stats { font-size: 0.75rem; color: #94a3b8; text-align: right; white-space: nowrap; }
+  .top-item .dep-count { color: #3b82f6; font-weight: 700; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="chart-wrap">
+  <h1>Popularity Distribution</h1>
+  <p id="status">Loading enrichment data...</p>
+  <p id="sub">How many dependents do groups have? Distribution from Sonatype Central Portal enrichment data. Most groups have zero dependents.</p>
+  <div id="chart"></div>
+</div>
+<div id="top-list">
+  <h2>Top Groups by Dependents</h2>
+  <div id="top-grid" class="top-grid"></div>
+</div>
+<script>
+const chart = echarts.init(document.getElementById('chart'), 'dark');
+
+function update() {
+  fetch('/api/popularity')
+    .then(r => {
+      if (r.status === 503) throw new Error('not ready');
+      return r.json();
+    })
+    .then(data => {
+      if (!data || !data.distribution) throw new Error('empty');
+
+      const dist = data.distribution;
+      const labels = dist.map(d => d.bucket + ' dependents');
+      const values = dist.map(d => d.count);
+      const total = values.reduce((s, v) => s + v, 0);
+
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'axis',
+          formatter: params => {
+            const p = params[0];
+            const pct = (p.value / total * 100).toFixed(1);
+            return p.name + '<br/>' + p.marker + ' ' + p.value.toLocaleString() + ' groups (' + pct + '%)';
+          },
+        },
+        xAxis: {
+          type: 'category',
+          data: labels,
+          axisLabel: { color: '#64748b', fontSize: 12 },
+          axisLine: { lineStyle: { color: '#1e293b' } },
+        },
+        yAxis: {
+          type: 'log',
+          axisLabel: { color: '#64748b' },
+          splitLine: { lineStyle: { color: '#1e293b' } },
+        },
+        series: [{
+          type: 'bar',
+          data: values.map((v, i) => ({
+            value: v,
+            itemStyle: { color: ['#334155', '#3b82f6', '#10b981', '#f59e0b', '#ef4444'][i] || '#3b82f6' },
+          })),
+          barMaxWidth: 80,
+          label: {
+            show: true,
+            position: 'top',
+            formatter: p => p.value.toLocaleString(),
+            color: '#94a3b8',
+            fontSize: 12,
+          },
+        }],
+        grid: { top: 30, bottom: 40, left: 60, right: 20 },
+      });
+
+      document.getElementById('status').textContent =
+        total.toLocaleString() + ' groups with Portal enrichment data (log scale)';
+
+      // Top groups list
+      if (data.top_groups && data.top_groups.length > 0) {
+        document.getElementById('top-grid').innerHTML = data.top_groups.map(g => {
+          const ns = g.group_id.replace(/\./g, '/');
+          const url = 'https://repo1.maven.org/maven2/' + ns + '/';
+          return '<div class="top-item">' +
+            '<a class="name" href="' + url + '" target="_blank">' + g.group_id + '</a>' +
+            '<div class="stats"><span class="dep-count">' + g.dependent_count.toLocaleString() + '</span> deps' +
+            (g.app_count > 0 ? ' / ' + g.app_count.toLocaleString() + ' apps' : '') + '</div>' +
+            '</div>';
+        }).join('');
+      }
+
+      setTimeout(update, 120000);
+    })
+    .catch(() => {
+      document.getElementById('status').textContent = 'Waiting for Portal enrichment data...';
+      setTimeout(update, 15000);
+    });
+}
+
+update();
+window.addEventListener('resize', () => chart.resize());
+</script>
+</body>
+</html>`
+
+func PopularityChart(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(popularityChartHTML))
+}

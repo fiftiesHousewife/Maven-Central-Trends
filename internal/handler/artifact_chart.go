@@ -130,16 +130,16 @@ function update() {
 
       const months = data.map(d => d.month);
       const newArt = data.map(d => d.new_artifacts);
-      const cumulArt = data.map(d => d.cumul_artifacts);
 
-      // 3-month moving average
-      const window = 3;
-      const trend = newArt.map((v, i) => {
-        if (i < window - 1) return null;
-        let sum = 0;
-        for (let j = i - window + 1; j <= i; j++) sum += newArt[j];
-        return Math.round(sum / window);
-      });
+      // Linear regression trend line
+      const n = newArt.length;
+      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+      for (let i = 0; i < n; i++) {
+        sumX += i; sumY += newArt[i]; sumXY += i * newArt[i]; sumX2 += i * i;
+      }
+      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+      const intercept = (sumY - slope * sumX) / n;
+      const trend = newArt.map((_, i) => Math.round(slope * i + intercept));
 
       const markLines = milestones
         .filter(m => months.includes(m.month))
@@ -175,17 +175,11 @@ function update() {
           axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 },
           axisLine: { lineStyle: { color: '#1e293b' } },
         },
-        yAxis: [{
-          type: 'value', name: 'New artifacts',
-          nameTextStyle: { color: '#64748b' },
+        yAxis: {
+          type: 'value',
           axisLabel: { color: '#64748b' },
           splitLine: { lineStyle: { color: '#1e293b' } },
-        }, {
-          type: 'value', name: 'Cumulative',
-          nameTextStyle: { color: '#64748b' },
-          axisLabel: { color: '#64748b' },
-          splitLine: { show: false },
-        }],
+        },
         series: [{
           name: 'New artifacts',
           type: 'bar',
@@ -194,33 +188,25 @@ function update() {
           markLine: { symbol: 'none', data: markLines, silent: true },
           barMaxWidth: 30,
         }, {
-          name: '3-month trend',
+          name: 'Trend',
           type: 'line',
           data: trend,
-          smooth: true, symbol: 'none',
+          symbol: 'none',
           lineStyle: { color: '#f59e0b', width: 2 },
           z: 10,
-        }, {
-          name: 'Cumulative total',
-          type: 'line',
-          yAxisIndex: 1,
-          data: cumulArt,
-          smooth: true, symbol: 'none',
-          lineStyle: { color: '#8b5cf6', width: 2 },
-          z: 10,
         }],
-        grid: { top: 50, bottom: 60, left: 60, right: 70 },
+        grid: { top: 50, bottom: 60, left: 50, right: 20 },
       });
 
-      const last = data[data.length - 1];
+      const total = newArt.reduce((s, v) => s + v, 0);
       const recent6 = data.slice(-6);
       const avgNew = Math.round(recent6.reduce((s, d) => s + d.new_artifacts, 0) / recent6.length);
 
       document.getElementById('status').textContent =
-        last.cumul_artifacts.toLocaleString() + ' total artifacts tracked';
+        total.toLocaleString() + ' artifacts tracked';
       document.getElementById('summary').innerHTML =
-        '<div class="stat-card"><div class="value blue">' + last.cumul_artifacts.toLocaleString() + '</div><div class="label">Total artifacts</div></div>' +
-        '<div class="stat-card"><div class="value amber">' + avgNew.toLocaleString() + '</div><div class="label">Avg new artifacts/month (6m)</div></div>' +
+        '<div class="stat-card"><div class="value blue">' + total.toLocaleString() + '</div><div class="label">Total artifacts</div></div>' +
+        '<div class="stat-card"><div class="value amber">' + avgNew.toLocaleString() + '</div><div class="label">Avg new/month (6m)</div></div>' +
         '<div class="stat-card"><div class="value green">' + newArt[newArt.length - 1].toLocaleString() + '</div><div class="label">Last month</div></div>';
 
       setTimeout(update, 120000);

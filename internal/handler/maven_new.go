@@ -14,6 +14,17 @@ import (
 	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
+var httpClient = &http.Client{Timeout: 15 * time.Second}
+
+type depsDevResponse struct {
+	Versions []struct {
+		VersionKey struct {
+			Version string `json:"version"`
+		} `json:"versionKey"`
+		PublishedAt string `json:"publishedAt"`
+	} `json:"versions"`
+}
+
 // Top-level prefixes to scan for new groups.
 var prefixes = []string{
 	"ai", "app", "cc", "cloud", "co", "com", "de", "dev",

@@ -79,13 +79,6 @@ func migrate() error {
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 
-	CREATE TABLE IF NOT EXISTS version_publishes (
-		namespace TEXT NOT NULL,
-		month TEXT NOT NULL,
-		publish_count INTEGER NOT NULL DEFAULT 0,
-		PRIMARY KEY (namespace, month)
-	);
-
 	CREATE TABLE IF NOT EXISTS scan_progress (
 		prefix TEXT PRIMARY KEY,
 		subgroups_count INTEGER NOT NULL DEFAULT 0,
@@ -360,57 +353,6 @@ func TotalGroups() int {
 	return n
 }
 
-// --- Version Publishes CRUD ---
-
-// UpsertVersionPublish inserts or updates a version publish count.
-func UpsertVersionPublish(namespace, month string, count int) error {
-	_, err := db.Exec(`
-		INSERT INTO version_publishes (namespace, month, publish_count)
-		VALUES (?, ?, ?)
-		ON CONFLICT(namespace, month) DO UPDATE SET publish_count = excluded.publish_count`,
-		namespace, month, count)
-	return err
-}
-
-// VersionPublishes returns all version publish data, keyed by month.
-func VersionPublishes() ([]VersionPublishMonth, error) {
-	rows, err := db.Query(`
-		SELECT namespace, month, publish_count
-		FROM version_publishes
-		ORDER BY month, namespace`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	byMonth := make(map[string]map[string]int)
-	for rows.Next() {
-		var ns, month string
-		var count int
-		if err := rows.Scan(&ns, &month, &count); err != nil {
-			return nil, err
-		}
-		if byMonth[month] == nil {
-			byMonth[month] = make(map[string]int)
-		}
-		byMonth[month][ns] = count
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	var result []VersionPublishMonth
-	for month, groups := range byMonth {
-		result = append(result, VersionPublishMonth{Month: month, Groups: groups})
-	}
-	return result, nil
-}
-
-type VersionPublishMonth struct {
-	Month  string         `json:"month"`
-	Groups map[string]int `json:"groups"`
-}
-
 // --- Scan Progress CRUD ---
 
 // SetPrefixComplete marks a prefix scan as complete.
@@ -597,6 +539,302 @@ func VersionsByMonth() ([]VersionTrendStat, error) {
 		result = append(result, s)
 	}
 	return result, rows.Err()
+}
+
+// CVETrendStat holds per-month CVE summary.
+type CVETrendStat struct {
+	Month      string         `json:"month"`
+	WithCVEs   int            `json:"with_cves"`
+	WithoutCVEs int           `json:"without_cves"`
+	TotalCVEs  int            `json:"total_cves"`
+	Severities map[string]int `json:"severities"`
+}
+
+// CVEsByMonth returns CVE stats per month from OSV-enriched groups.
+func CVEsByMonth() ([]CVETrendStat, error) {
+	rows, err := db.Query(`
+		SELECT substr(first_published, 1, 7) AS month,
+			SUM(CASE WHEN cve_count > 0 THEN 1 ELSE 0 END) AS with_cves,
+			SUM(CASE WHEN cve_count = 0 THEN 1 ELSE 0 END) AS without_cves,
+			SUM(cve_count) AS total_cves
+		FROM groups
+		WHERE enriched_osv = 1 AND first_published != ''
+		GROUP BY month
+		ORDER BY month`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []CVETrendStat
+	for rows.Next() {
+		var s CVETrendStat
+		if err := rows.Scan(&s.Month, &s.WithCVEs, &s.WithoutCVEs, &s.TotalCVEs); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Second query for severity breakdown per month
+	sevRows, err := db.Query(`
+		SELECT substr(first_published, 1, 7) AS month, max_cve_severity, COUNT(*) AS cnt
+		FROM groups
+		WHERE enriched_osv = 1 AND cve_count > 0 AND first_published != ''
+		GROUP BY month, max_cve_severity
+		ORDER BY month`)
+	if err != nil {
+		return result, nil // return what we have
+	}
+	defer sevRows.Close()
+
+	sevByMonth := make(map[string]map[string]int)
+	for sevRows.Next() {
+		var month, sev string
+		var cnt int
+		if err := sevRows.Scan(&month, &sev, &cnt); err != nil {
+			continue
+		}
+		if sevByMonth[month] == nil {
+			sevByMonth[month] = make(map[string]int)
+		}
+		sevByMonth[month][sev] = cnt
+	}
+
+	for i := range result {
+		result[i].Severities = sevByMonth[result[i].Month]
+		if result[i].Severities == nil {
+			result[i].Severities = make(map[string]int)
+		}
+	}
+	return result, nil
+}
+
+// SourceRepoStat holds per-month source repo presence.
+type SourceRepoStat struct {
+	Month   string `json:"month"`
+	WithRepo int   `json:"with_repo"`
+	Without  int   `json:"without_repo"`
+	Total    int   `json:"total"`
+}
+
+// SourceRepoByMonth returns % of groups with a linked source repo per month.
+func SourceRepoByMonth() ([]SourceRepoStat, error) {
+	rows, err := db.Query(`
+		SELECT substr(first_published, 1, 7) AS month,
+			SUM(CASE WHEN source_repo != '' THEN 1 ELSE 0 END) AS with_repo,
+			SUM(CASE WHEN source_repo = '' THEN 1 ELSE 0 END) AS without_repo,
+			COUNT(*) AS total
+		FROM groups
+		WHERE enriched_depsdev = 1 AND first_published != ''
+		GROUP BY month
+		ORDER BY month`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []SourceRepoStat
+	for rows.Next() {
+		var s SourceRepoStat
+		if err := rows.Scan(&s.Month, &s.WithRepo, &s.Without, &s.Total); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// PopularityStat holds popularity distribution data.
+type PopularityStat struct {
+	Bucket    string `json:"bucket"`
+	Count     int    `json:"count"`
+}
+
+// PopularityDistribution returns groups bucketed by dependent count.
+func PopularityDistribution() ([]PopularityStat, error) {
+	rows, err := db.Query(`
+		SELECT
+			CASE
+				WHEN dependent_count = 0 THEN '0'
+				WHEN dependent_count BETWEEN 1 AND 10 THEN '1-10'
+				WHEN dependent_count BETWEEN 11 AND 100 THEN '11-100'
+				WHEN dependent_count BETWEEN 101 AND 1000 THEN '101-1K'
+				ELSE '1K+'
+			END AS bucket,
+			COUNT(*) AS cnt
+		FROM groups
+		WHERE enriched_portal = 1
+		GROUP BY bucket
+		ORDER BY MIN(dependent_count)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []PopularityStat
+	for rows.Next() {
+		var s PopularityStat
+		if err := rows.Scan(&s.Bucket, &s.Count); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// TopGroupsByDependents returns the top N groups by dependent count.
+type TopGroup struct {
+	GroupID        string `json:"group_id"`
+	DependentCount int    `json:"dependent_count"`
+	AppCount       int    `json:"app_count"`
+	ArtifactCount  int    `json:"artifact_count"`
+	License        string `json:"license"`
+}
+
+func TopGroupsByDependents(limit int) ([]TopGroup, error) {
+	rows, err := db.Query(`
+		SELECT group_id, dependent_count, app_count, artifact_count, license
+		FROM groups
+		WHERE enriched_portal = 1 AND dependent_count > 0
+		ORDER BY dependent_count DESC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []TopGroup
+	for rows.Next() {
+		var g TopGroup
+		if err := rows.Scan(&g.GroupID, &g.DependentCount, &g.AppCount, &g.ArtifactCount, &g.License); err != nil {
+			return nil, err
+		}
+		result = append(result, g)
+	}
+	return result, rows.Err()
+}
+
+// SizeDistribution returns groups bucketed by artifact count.
+type SizeStat struct {
+	Bucket string `json:"bucket"`
+	Count  int    `json:"count"`
+}
+
+func SizeDistribution() ([]SizeStat, error) {
+	rows, err := db.Query(`
+		SELECT
+			CASE
+				WHEN artifact_count <= 1 THEN '1'
+				WHEN artifact_count BETWEEN 2 AND 5 THEN '2-5'
+				WHEN artifact_count BETWEEN 6 AND 10 THEN '6-10'
+				WHEN artifact_count BETWEEN 11 AND 50 THEN '11-50'
+				WHEN artifact_count BETWEEN 51 AND 200 THEN '51-200'
+				ELSE '200+'
+			END AS bucket,
+			COUNT(*) AS cnt
+		FROM groups
+		WHERE artifact_count > 0
+		GROUP BY bucket
+		ORDER BY MIN(artifact_count)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []SizeStat
+	for rows.Next() {
+		var s SizeStat
+		if err := rows.Scan(&s.Bucket, &s.Count); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// SizeByMonth returns artifact count stats per creation month.
+type SizeByMonthStat struct {
+	Month      string `json:"month"`
+	Single     int    `json:"single"`
+	Small      int    `json:"small"`
+	Medium     int    `json:"medium"`
+	Large      int    `json:"large"`
+}
+
+func SizeDistributionByMonth() ([]SizeByMonthStat, error) {
+	rows, err := db.Query(`
+		SELECT substr(first_published, 1, 7) AS month,
+			SUM(CASE WHEN artifact_count <= 1 THEN 1 ELSE 0 END) AS single,
+			SUM(CASE WHEN artifact_count BETWEEN 2 AND 5 THEN 1 ELSE 0 END) AS small,
+			SUM(CASE WHEN artifact_count BETWEEN 6 AND 50 THEN 1 ELSE 0 END) AS medium,
+			SUM(CASE WHEN artifact_count > 50 THEN 1 ELSE 0 END) AS large
+		FROM groups
+		WHERE first_published != '' AND artifact_count > 0
+		GROUP BY month
+		ORDER BY month`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []SizeByMonthStat
+	for rows.Next() {
+		var s SizeByMonthStat
+		if err := rows.Scan(&s.Month, &s.Single, &s.Small, &s.Medium, &s.Large); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// PrefixMonthCount holds per-month new group counts by top-level prefix.
+type PrefixMonthCount struct {
+	Month    string         `json:"month"`
+	Prefixes map[string]int `json:"prefixes"`
+}
+
+// GroupsByMonthAndPrefix returns new groups per month broken down by top-level prefix.
+func GroupsByMonthAndPrefix() ([]PrefixMonthCount, error) {
+	rows, err := db.Query(`
+		SELECT substr(first_published, 1, 7) AS month,
+			substr(group_id, 1, instr(group_id, '.') - 1) AS prefix,
+			COUNT(*) AS cnt
+		FROM groups
+		WHERE first_published != ''
+		GROUP BY month, prefix
+		ORDER BY month, cnt DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byMonth := make(map[string]map[string]int)
+	var months []string
+	for rows.Next() {
+		var month, prefix string
+		var cnt int
+		if err := rows.Scan(&month, &prefix, &cnt); err != nil {
+			return nil, err
+		}
+		if byMonth[month] == nil {
+			byMonth[month] = make(map[string]int)
+			months = append(months, month)
+		}
+		byMonth[month][prefix] = cnt
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var result []PrefixMonthCount
+	for _, m := range months {
+		result = append(result, PrefixMonthCount{Month: m, Prefixes: byMonth[m]})
+	}
+	return result, nil
 }
 
 // --- Helpers ---

@@ -40,7 +40,6 @@ func run() error {
 		return fmt.Errorf("migrate JSON: %w", err)
 	}
 
-	handler.StartFetch()
 	handler.StartNewFetch()
 	handler.StartEnrichment()
 
@@ -53,10 +52,13 @@ func run() error {
 	mux.HandleFunc("GET /license-trends", handler.LicenseChart)
 	mux.HandleFunc("GET /artifact-trends", handler.ArtifactChart)
 	mux.HandleFunc("GET /version-trends", handler.VersionsChart)
+	mux.HandleFunc("GET /cve-trends", handler.CVEChart)
+	mux.HandleFunc("GET /source-repos", handler.SourceRepoChart)
+	mux.HandleFunc("GET /popularity", handler.PopularityChart)
+	mux.HandleFunc("GET /size-distribution", handler.SizeChart)
 
 	// API
 	mux.HandleFunc("GET /api/scan-progress", handler.ScanProgress)
-	mux.HandleFunc("GET /api/publishes", handler.MavenSeries)
 	mux.HandleFunc("GET /api/new-groups", handler.MavenNew)
 	mux.HandleFunc("GET /api/new-groups/details", handler.MavenNewGroups)
 	mux.HandleFunc("GET /api/group-popularity", handler.GroupPopularity)
@@ -65,6 +67,11 @@ func run() error {
 	mux.HandleFunc("GET /api/one-and-done", handler.OneAndDone)
 	mux.HandleFunc("GET /api/growth", handler.GrowthData)
 	mux.HandleFunc("GET /api/version-trends", handler.VersionTrends)
+	mux.HandleFunc("GET /api/groups-by-prefix", handler.GroupsByPrefix)
+	mux.HandleFunc("GET /api/cve-trends", handler.CVETrends)
+	mux.HandleFunc("GET /api/source-repos", handler.SourceRepoTrends)
+	mux.HandleFunc("GET /api/popularity", handler.PopularityData)
+	mux.HandleFunc("GET /api/size-distribution", handler.SizeData)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

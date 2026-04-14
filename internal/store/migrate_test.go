@@ -26,15 +26,6 @@ func TestMigrateFromJSON(t *testing.T) {
 		"completed_prefixes": {"com": 12914, "ai": 277}
 	}`), 0644)
 
-	// Write fake series cache
-	os.WriteFile(filepath.Join(dir, "maven_series_cache.json"), []byte(`{
-		"groups": [{"namespace": "io.quarkus", "label": "Quarkus"}],
-		"months": [
-			{"month": "2024-01", "groups": {"io.quarkus": 15, "com.google.cloud": 45}},
-			{"month": "2024-02", "groups": {"io.quarkus": 20}}
-		]
-	}`), 0644)
-
 	if err := MigrateFromJSON(dir); err != nil {
 		t.Fatalf("MigrateFromJSON: %v", err)
 	}
@@ -62,16 +53,6 @@ func TestMigrateFromJSON(t *testing.T) {
 	}
 	if completed["ai"] != 277 {
 		t.Errorf("ai prefix = %d, want 277", completed["ai"])
-	}
-
-	// Verify version publishes
-	vp, _ := VersionPublishes()
-	m := make(map[string]map[string]int)
-	for _, v := range vp {
-		m[v.Month] = v.Groups
-	}
-	if m["2024-01"]["io.quarkus"] != 15 {
-		t.Errorf("io.quarkus 2024-01 = %d, want 15", m["2024-01"]["io.quarkus"])
 	}
 
 	// Verify idempotency — second call should be a no-op

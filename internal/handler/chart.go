@@ -7,110 +7,128 @@ const chartHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Maven Central — Versions Published Per Month</title>
+<title>Maven Central — New Groups By Prefix</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
   h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-  p#status { color: #94a3b8; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  p#status { color: #94a3b8; font-size: 0.9rem; margin-bottom: 1rem; }
   .chart-wrap { position: relative; width: 100%; max-width: 1200px; margin: 0 auto; }
-  canvas { width: 100% !important; height: 500px !important; }
+  #chart { width: 100%; height: 550px; }
 </style>
 </head>
 <body>
 <div class="chart-wrap">
-  <h1>Maven Central — Versions Published Per Month, Last 3 Years</h1>
-  <p id="status">Loading data… fetching from deps.dev.</p>
-  <canvas id="chart"></canvas>
+  <h1>New Groups Per Month By Prefix</h1>
+  <p id="status">Loading data...</p>
+  <div id="chart"></div>
 </div>
 <script>
-const colors = [
-  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
-  '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#6366f1'
+const chart = echarts.init(document.getElementById('chart'), 'dark');
+
+const palette = [
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1',
+  '#14b8a6', '#e879f9',
 ];
 
-let chart = null;
-
 function update() {
-  fetch('/api/publishes')
+  fetch('/api/groups-by-prefix')
     .then(r => {
-      if (r.status === 503) throw new Error('still fetching');
+      if (r.status === 503) throw new Error('not ready');
       return r.json();
     })
     .then(data => {
-      const { groups, months } = data;
-      const groupsDone = groups.filter(g =>
-        months.some(m => (m.groups[g.namespace] || 0) > 0)
-      ).length;
+      if (!data || data.length === 0) throw new Error('empty');
 
-      document.getElementById('status').textContent = groupsDone >= groups.length
-        ? groups.length + ' groups loaded — data from deps.dev + repo1.maven.org'
-        : 'Fetching… ' + groupsDone + '/' + groups.length + ' groups loaded';
+      // Aggregate totals per prefix across all months
+      const totals = {};
+      data.forEach(m => {
+        Object.entries(m.prefixes).forEach(([p, cnt]) => {
+          totals[p] = (totals[p] || 0) + cnt;
+        });
+      });
 
-      const labels = months.map(m => m.month);
-      const datasets = groups.map((g, i) => ({
-        label: g.label,
-        data: months.map(m => Math.max(0, m.groups[g.namespace] || 0)),
-        borderColor: colors[i % colors.length],
-        backgroundColor: colors[i % colors.length] + '88',
-        fill: true,
-        pointRadius: 2,
-        tension: 0.3,
-        borderWidth: 1.5,
+      // Top 10 prefixes, rest as Other
+      const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+      const topN = 10;
+      const topPrefixes = sorted.slice(0, topN).map(e => e[0]);
+      const topSet = new Set(topPrefixes);
+
+      const months = data.map(m => m.month);
+
+      const seriesData = {};
+      topPrefixes.forEach(p => { seriesData[p] = []; });
+      seriesData['Other'] = [];
+
+      data.forEach(m => {
+        let otherCount = 0;
+        topPrefixes.forEach(p => {
+          seriesData[p].push(m.prefixes[p] || 0);
+        });
+        Object.entries(m.prefixes).forEach(([p, cnt]) => {
+          if (!topSet.has(p)) otherCount += cnt;
+        });
+        seriesData['Other'].push(otherCount);
+      });
+
+      const allKeys = [...topPrefixes, 'Other'];
+      const series = allKeys.map((name, i) => ({
+        name: name + '.*',
+        type: 'line',
+        stack: 'prefixes',
+        areaStyle: { opacity: 0.7 },
+        data: seriesData[name],
+        itemStyle: { color: palette[i % palette.length] },
+        emphasis: { focus: 'series' },
+        symbol: 'none',
+        lineStyle: { width: 1 },
       }));
 
-      if (!chart) {
-        chart = new Chart(document.getElementById('chart'), {
-          type: 'line',
-          data: { labels, datasets },
-          options: {
-            responsive: true,
-            animation: false,
-            interaction: { intersect: false, mode: 'index' },
-            scales: {
-              x: {
-                ticks: { color: '#64748b', maxTicksLimit: 18 },
-                grid: { color: '#1e293b' },
-              },
-              y: {
-                stacked: true,
-                beginAtZero: true,
-                ticks: { color: '#64748b' },
-                grid: { color: '#1e293b' },
-              }
-            },
-            plugins: {
-              legend: {
-                reverse: true,
-                labels: { color: '#e2e8f0', usePointStyle: true, pointStyle: 'rect' }
-              },
-              tooltip: {
-                itemSort: (a, b) => b.datasetIndex - a.datasetIndex,
-                callbacks: {
-                  label: ctx => ctx.dataset.label + ': ' + ctx.raw.toLocaleString() + ' versions'
-                }
-              }
-            }
-          }
-        });
-      } else {
-        chart.data.labels = labels;
-        groups.forEach((g, i) => {
-          chart.data.datasets[i].data = months.map(m => Math.max(0, m.groups[g.namespace] || 0));
-        });
-        chart.update();
-      }
+      const total = Object.values(totals).reduce((s, v) => s + v, 0);
+      document.getElementById('status').textContent =
+        total.toLocaleString() + ' groups across ' + sorted.length + ' prefixes';
 
-      if (groupsDone < groups.length) setTimeout(update, 10000);
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'cross' },
+        },
+        legend: {
+          show: true,
+          top: 5,
+          right: 20,
+          textStyle: { color: '#94a3b8', fontSize: 11 },
+        },
+        xAxis: {
+          type: 'category',
+          data: months,
+          boundaryGap: false,
+          axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 },
+          axisLine: { lineStyle: { color: '#1e293b' } },
+        },
+        yAxis: {
+          type: 'value',
+          axisLabel: { color: '#64748b' },
+          splitLine: { lineStyle: { color: '#1e293b' } },
+        },
+        series: series,
+        grid: { top: 50, bottom: 60, left: 50, right: 20 },
+      });
+
+      setTimeout(update, 120000);
     })
     .catch(() => {
-      setTimeout(update, 5000);
+      document.getElementById('status').textContent = 'Waiting for data...';
+      setTimeout(update, 15000);
     });
 }
 
 update();
+window.addEventListener('resize', () => chart.resize());
 </script>
 </body>
 </html>`
