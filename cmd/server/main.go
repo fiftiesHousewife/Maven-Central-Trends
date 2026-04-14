@@ -36,10 +36,6 @@ func run() error {
 	}
 	defer store.Close()
 
-	if err := store.MigrateFromJSON("data"); err != nil {
-		return fmt.Errorf("migrate JSON: %w", err)
-	}
-
 	handler.StartNewFetch()
 	handler.StartEnrichment()
 

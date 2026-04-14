@@ -1,6 +1,12 @@
 # Maven Central Publishing Trends
 
+[![CI](https://github.com/fiftiesHousewife/Maven-Central-Trends/actions/workflows/ci.yml/badge.svg)](https://github.com/fiftiesHousewife/Maven-Central-Trends/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![License](https://img.shields.io/badge/License-ISC-blue)](LICENSE)
+
 A Go service that visualises Maven Central publishing activity over time, with a focus on whether AI coding tools have increased the rate of new library creation.
+
+![New Groups Per Month](docs/new-groups-chart.png)
 
 ## Endpoints
 
@@ -77,7 +83,7 @@ npx playwright test --headed  # debug with visible browser
 
 ### Data storage
 
-All data is stored in a SQLite database at `data/maven.db` (WAL mode). Legacy JSON cache files are automatically migrated to SQLite on first run.
+All data is stored in a SQLite database at `data/maven.db` (WAL mode).
 
 | Table | Purpose |
 |-------|---------|
