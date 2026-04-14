@@ -154,7 +154,20 @@ func deepenGroups() {
 			continue
 		}
 
-		// Check each entry: if it's NOT an artifact (no version-like subdirs), it's a deeper group
+		// Skip groups with no deeper candidates (only artifacts, no subdirs to check)
+		// Count namespace candidates first
+		candidates := 0
+		for _, entry := range entries {
+			if !store.GroupExists(groupID + "." + entry) {
+				candidates++
+			}
+		}
+
+		if candidates > 0 {
+			slog.Info("deep scanning", "group", groupID, "entries", len(entries), "candidates", candidates)
+		}
+
+		checked := 0
 		for _, entry := range entries {
 			subpath := path + "/" + entry
 			deepGroupID := groupID + "." + entry
@@ -163,13 +176,15 @@ func deepenGroups() {
 				continue
 			}
 
+			checked++
+
 			// Peek inside to see if this contains version directories (= artifact) or more dirs (= namespace)
 			subEntries, err := listSubgroups(subpath)
 			if err != nil || len(subEntries) == 0 {
 				continue
 			}
 
-			// If first entry starts with a digit, this is an artifact dir, skip
+			// If any entry starts with a digit, this is an artifact dir, skip
 			hasVersion := false
 			for _, se := range subEntries {
 				if len(se) > 0 && se[0] >= '0' && se[0] <= '9' {
@@ -184,6 +199,7 @@ func deepenGroups() {
 			// This is a deeper namespace — register it as a group
 			info, err := firstPublishInfo(deepGroupID)
 			if err != nil {
+				slog.Debug("deep group skipped", "group", deepGroupID, "error", err)
 				continue
 			}
 
@@ -207,7 +223,7 @@ func deepenGroups() {
 			scanStatus.TotalGroupsFound++
 			scanStatus.mu.Unlock()
 
-			slog.Info("deep group found", "group", deepGroupID, "artifact", info.FirstArtifact)
+			slog.Info("deep group found", "group", deepGroupID, "artifact", info.FirstArtifact, "total_new", newFound)
 			time.Sleep(100 * time.Millisecond)
 		}
 
@@ -215,8 +231,8 @@ func deepenGroups() {
 		scanStatus.EnrichmentDone = i + 1
 		scanStatus.mu.Unlock()
 
-		if (i+1)%100 == 0 {
-			slog.Info("deep scan progress", "done", i+1, "of", len(existing), "new", newFound)
+		if (i+1)%100 == 0 || candidates > 10 {
+			slog.Info("deep scan progress", "done", i+1, "of", len(existing), "new_groups", newFound, "current", groupID, "checked", checked)
 		}
 
 		time.Sleep(50 * time.Millisecond)
