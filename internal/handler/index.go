@@ -43,7 +43,22 @@ const indexHTML = `<!DOCTYPE html>
 
   <a class="card" href="/new-groups-per-month">
     <h2>New Groups Per Month</h2>
-    <p>Bar chart counting brand-new Maven Central namespaces each month. Click any bar to explore the actual groups created. Blue = pre-2024, green = AI coding tools era.</p>
+    <p>Bar chart counting brand-new Maven Central namespaces each month, with a one-and-done % overlay showing single-version abandonment rate. Click any bar to explore groups.</p>
+  </a>
+
+  <a class="card" href="/license-trends">
+    <h2>License Trends</h2>
+    <p>Stacked bar chart showing how license choices evolve over time. Top 8 licenses broken out, the rest grouped as Other. Powered by deps.dev enrichment.</p>
+  </a>
+
+  <a class="card" href="/artifact-trends">
+    <h2>Maven Central Growth</h2>
+    <p>Cumulative groups and artifacts over time with monthly additions. Click any bar to drill into that month's new groups, sorted by artifact count.</p>
+  </a>
+
+  <a class="card" href="/version-trends">
+    <h2>Version Trends</h2>
+    <p>Total versions published by all groups per month from deps.dev enrichment. Are groups publishing more or fewer versions over time? Click any bar to explore.</p>
   </a>
 
   <div class="api">

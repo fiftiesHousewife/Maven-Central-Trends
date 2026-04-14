@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/pippanewbold/agent/internal/handler"
+	"github.com/pippanewbold/maven-central-trends/internal/handler"
 )
 
 func TestHealth(t *testing.T) {

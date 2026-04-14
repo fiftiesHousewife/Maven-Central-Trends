@@ -4,16 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"os"
-	"sync"
-)
 
-type popularityInfo struct {
-	GroupID        string `json:"group_id"`
-	DependentCount int    `json:"dependent_count"`
-	AppCount       int    `json:"app_count"`
-	OrgCount       int    `json:"org_count"`
-}
+	"github.com/pippanewbold/maven-central-trends/internal/store"
+)
 
 type centralBrowseResponse struct {
 	Components []struct {
@@ -26,37 +19,11 @@ type centralBrowseResponse struct {
 	TotalResultCount int `json:"totalResultCount"`
 }
 
-const popularityCacheFile = "data/maven_popularity_cache.json"
-
-var (
-	popMu    sync.RWMutex
-	popCache map[string]popularityInfo
-)
-
-func init() {
-	popCache = loadPopularityCache()
-}
-
-func loadPopularityCache() map[string]popularityInfo {
-	data, err := os.ReadFile(popularityCacheFile)
-	if err != nil {
-		return make(map[string]popularityInfo)
-	}
-	var cached map[string]popularityInfo
-	if err := json.Unmarshal(data, &cached); err != nil {
-		return make(map[string]popularityInfo)
-	}
-	return cached
-}
-
-func savePopularityCache() {
-	popMu.RLock()
-	b, err := json.Marshal(popCache)
-	popMu.RUnlock()
-	if err != nil {
-		return
-	}
-	os.WriteFile(popularityCacheFile, b, 0644)
+type popularityJSON struct {
+	GroupID        string `json:"group_id"`
+	DependentCount int    `json:"dependent_count"`
+	AppCount       int    `json:"app_count"`
+	OrgCount       int    `json:"org_count"`
 }
 
 func GroupPopularity(w http.ResponseWriter, r *http.Request) {
@@ -66,18 +33,21 @@ func GroupPopularity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check cache first
-	popMu.RLock()
-	if info, ok := popCache[ns]; ok {
-		popMu.RUnlock()
+	// Check if already enriched in the DB
+	g, err := store.GroupByID(ns)
+	if err == nil && g.EnrichedPortal {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
-		json.NewEncoder(w).Encode(info)
+		json.NewEncoder(w).Encode(popularityJSON{
+			GroupID:        ns,
+			DependentCount: g.DependentCount,
+			AppCount:       g.AppCount,
+			OrgCount:       g.OrgCount,
+		})
 		return
 	}
-	popMu.RUnlock()
 
-	// Fetch from Central Portal
+	// Fetch on-demand from Central Portal
 	body, _ := json.Marshal(map[string]any{
 		"sortField":     "dependentOnCount",
 		"sortDirection": "desc",
@@ -108,7 +78,7 @@ func GroupPopularity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info := popularityInfo{GroupID: ns}
+	info := popularityJSON{GroupID: ns}
 	if len(result.Components) > 0 {
 		c := result.Components[0]
 		info.DependentCount = c.DependentOnCount
@@ -116,11 +86,8 @@ func GroupPopularity(w http.ResponseWriter, r *http.Request) {
 		info.OrgCount = c.NsPopularityOrgCount
 	}
 
-	// Cache and persist
-	popMu.Lock()
-	popCache[ns] = info
-	popMu.Unlock()
-	savePopularityCache()
+	// Store in DB for future use
+	store.UpdatePortalEnrichment(ns, info.DependentCount, info.AppCount, info.OrgCount, 0)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")

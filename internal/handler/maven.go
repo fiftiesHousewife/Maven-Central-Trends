@@ -34,7 +34,7 @@ func MavenNewArtifacts(w http.ResponseWriter, r *http.Request) {
 		"wt":   {"json"},
 	}.Encode()
 
-	resp, err := http.Get(u)
+	resp, err := httpClient.Get(u)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to query maven central: %v", err), http.StatusBadGateway)
 		return

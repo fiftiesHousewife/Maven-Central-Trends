@@ -10,9 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pippanewbold/agent/internal/config"
-	"github.com/pippanewbold/agent/internal/handler"
-	"github.com/pippanewbold/agent/internal/middleware"
+	"github.com/pippanewbold/maven-central-trends/internal/config"
+	"github.com/pippanewbold/maven-central-trends/internal/handler"
+	"github.com/pippanewbold/maven-central-trends/internal/middleware"
+	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
 func main() {
@@ -30,6 +31,15 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
+	if err := store.Open("data/maven.db"); err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer store.Close()
+
+	if err := store.MigrateFromJSON("data"); err != nil {
+		return fmt.Errorf("migrate JSON: %w", err)
+	}
+
 	handler.StartFetch()
 	handler.StartNewFetch()
 	handler.StartEnrichment()
@@ -40,6 +50,9 @@ func run() error {
 	mux.HandleFunc("GET /health", handler.Health)
 	mux.HandleFunc("GET /publishes-per-month", handler.Chart)
 	mux.HandleFunc("GET /new-groups-per-month", handler.NewChart2)
+	mux.HandleFunc("GET /license-trends", handler.LicenseChart)
+	mux.HandleFunc("GET /artifact-trends", handler.ArtifactChart)
+	mux.HandleFunc("GET /version-trends", handler.VersionsChart)
 
 	// API
 	mux.HandleFunc("GET /api/scan-progress", handler.ScanProgress)
@@ -48,6 +61,10 @@ func run() error {
 	mux.HandleFunc("GET /api/new-groups/details", handler.MavenNewGroups)
 	mux.HandleFunc("GET /api/group-popularity", handler.GroupPopularity)
 	mux.HandleFunc("GET /api/new-artifacts-today", handler.MavenNewArtifacts)
+	mux.HandleFunc("GET /api/license-trends", handler.LicenseTrends)
+	mux.HandleFunc("GET /api/one-and-done", handler.OneAndDone)
+	mux.HandleFunc("GET /api/growth", handler.GrowthData)
+	mux.HandleFunc("GET /api/version-trends", handler.VersionTrends)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

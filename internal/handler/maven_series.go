@@ -3,14 +3,16 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
-	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
 var groups = []struct {
@@ -28,13 +30,6 @@ var groups = []struct {
 	{"com.azure", "Azure SDK"},
 	{"io.micronaut", "Micronaut"},
 }
-
-type monthCount struct {
-	Month  string         `json:"month"`
-	Groups map[string]int `json:"groups"`
-}
-
-const cacheFile = "data/maven_series_cache.json"
 
 var (
 	fetchOnce sync.Once
@@ -97,7 +92,7 @@ type depsDevResponse struct {
 func getVersionDates(namespace, artifact string) ([]time.Time, error) {
 	pkg := fmt.Sprintf("%s:%s", namespace, artifact)
 	u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
-		strings.ReplaceAll(pkg, ":", "%3A"))
+		urlEncode(pkg))
 
 	resp, err := httpClient.Get(u)
 	if err != nil {
@@ -128,91 +123,49 @@ func getVersionDates(namespace, artifact string) ([]time.Time, error) {
 	return dates, nil
 }
 
-func loadCache() ([]monthCount, bool) {
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return nil, false
-	}
-	var cached struct {
-		Months []monthCount `json:"months"`
-	}
-	if err := json.Unmarshal(data, &cached); err != nil {
-		return nil, false
-	}
-	if len(cached.Months) == 0 {
-		return nil, false
-	}
-	return cached.Months, true
-}
-
 func fetchSeries() {
 	now := time.Now().UTC()
 	start := now.AddDate(-4, 0, 0)
 	start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
 
-	// Build month buckets — exclude current month unless it's the 30th or 31st
-	var monthStarts []time.Time
+	// Build month list
+	var monthKeys []string
 	for m := start; m.Before(now); m = m.AddDate(0, 1, 0) {
 		if m.Year() == now.Year() && m.Month() == now.Month() && now.Day() < 30 {
 			continue
 		}
-		monthStarts = append(monthStarts, m)
+		monthKeys = append(monthKeys, m.Format("2006-01"))
 	}
 
-	// Always initialize fresh month structure, then merge cache on top
-	months := make([]monthCount, len(monthStarts))
-	for i, m := range monthStarts {
-		months[i] = monthCount{
-			Month:  m.Format("2006-01"),
-			Groups: make(map[string]int),
-		}
+	// Check what's already in the DB
+	existing, err := store.VersionPublishes()
+	if err != nil {
+		slog.Error("failed to load version publishes", "error", err)
 	}
-
-	cachedMonths, cached := loadCache()
-	if cached {
-		// Merge cached group data into fresh months
-		for i, m := range months {
-			for _, cm := range cachedMonths {
-				if cm.Month == m.Month {
-					for k, v := range cm.Groups {
-						months[i].Groups[k] = v
-					}
-					break
-				}
+	cachedNS := make(map[string]bool)
+	for _, vp := range existing {
+		for ns, count := range vp.Groups {
+			if count > 0 {
+				cachedNS[ns] = true
 			}
 		}
 	}
 
 	for _, g := range groups {
-		// Skip groups that already have data in cache
-		if cached {
-			hasData := false
-			for _, m := range months {
-				if v, ok := m.Groups[g.Namespace]; ok && v > 0 {
-					hasData = true
-					break
-				}
-			}
-			if hasData {
-				slog.Info("skipping cached group", "namespace", g.Namespace)
-				continue
-			}
+		if cachedNS[g.Namespace] {
+			slog.Info("skipping cached namespace", "namespace", g.Namespace)
+			continue
 		}
 
 		slog.Info("fetching artifact list", "namespace", g.Namespace)
 		artifacts, err := listArtifacts(g.Namespace)
 		if err != nil {
 			slog.Error("failed to list artifacts", "namespace", g.Namespace, "error", err)
-			for i := range months {
-				months[i].Groups[g.Namespace] = -1
-			}
-			writeCache(months)
 			continue
 		}
 		slog.Info("found artifacts", "namespace", g.Namespace, "count", len(artifacts))
 
-		// Collect all publish dates across all artifacts in this namespace
-		namespaceDates := make(map[string]int) // month -> count
+		namespaceDates := make(map[string]int)
 
 		for j, artifact := range artifacts {
 			dates, err := getVersionDates(g.Namespace, artifact)
@@ -229,41 +182,53 @@ func fetchSeries() {
 
 			if (j+1)%50 == 0 {
 				slog.Info("artifact progress", "namespace", g.Namespace, "done", j+1, "of", len(artifacts))
-				// Intermediate save so progress isn't lost on crash
-				for i, m := range months {
-					if count, ok := namespaceDates[m.Month]; ok {
-						months[i].Groups[g.Namespace] = count
-					}
+				// Intermediate save
+				for _, mk := range monthKeys {
+					store.UpsertVersionPublish(g.Namespace, mk, namespaceDates[mk])
 				}
-				writeCache(months)
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		// Fill in month counts for this group
-		for i, m := range months {
-			if count, ok := namespaceDates[m.Month]; ok {
-				months[i].Groups[g.Namespace] = count
-			} else {
-				months[i].Groups[g.Namespace] = 0
-			}
+		// Save all months for this namespace
+		for _, mk := range monthKeys {
+			store.UpsertVersionPublish(g.Namespace, mk, namespaceDates[mk])
 		}
-
-		writeCache(months)
 		slog.Info("namespace complete", "namespace", g.Namespace, "artifacts", len(artifacts))
 	}
 
-	slog.Info("fetch complete", "months", len(months))
+	slog.Info("fetch complete", "months", len(monthKeys))
 }
 
-func writeCache(months []monthCount) {
+func MavenSeries(w http.ResponseWriter, r *http.Request) {
+	vps, err := store.VersionPublishes()
+	if err != nil || len(vps) == 0 {
+		http.Error(w, "data not yet available — fetch in progress", http.StatusServiceUnavailable)
+		return
+	}
+
+	now := time.Now().UTC()
+	currentMonth := now.Format("2006-01")
+
+	// Sort by month
+	sort.Slice(vps, func(i, j int) bool { return vps[i].Month < vps[j].Month })
+
+	// Filter out current partial month
+	var months []store.VersionPublishMonth
+	for _, vp := range vps {
+		if vp.Month == currentMonth && now.Day() < 30 {
+			continue
+		}
+		months = append(months, vp)
+	}
+
 	type resp struct {
 		Groups []struct {
 			Namespace string `json:"namespace"`
 			Label     string `json:"label"`
 		} `json:"groups"`
-		Months []monthCount `json:"months"`
+		Months []store.VersionPublishMonth `json:"months"`
 	}
 
 	out := resp{Months: months}
@@ -274,43 +239,6 @@ func writeCache(months []monthCount) {
 		}{g.Namespace, g.Label})
 	}
 
-	b, err := json.Marshal(out)
-	if err != nil {
-		return
-	}
-	os.WriteFile(cacheFile, b, 0644)
-}
-
-func MavenSeries(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile(cacheFile)
-	if err != nil {
-		http.Error(w, "data not yet available — fetch in progress", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Filter out current partial month unless it's the 30th or 31st
-	now := time.Now().UTC()
-	if now.Day() < 30 {
-		var cached struct {
-			Groups json.RawMessage `json:"groups"`
-			Months []monthCount    `json:"months"`
-		}
-		if err := json.Unmarshal(data, &cached); err == nil {
-			currentMonth := now.Format("2006-01")
-			filtered := make([]monthCount, 0, len(cached.Months))
-			for _, m := range cached.Months {
-				if m.Month != currentMonth {
-					filtered = append(filtered, m)
-				}
-			}
-			out := struct {
-				Groups json.RawMessage `json:"groups"`
-				Months []monthCount    `json:"months"`
-			}{cached.Groups, filtered}
-			data, _ = json.Marshal(out)
-		}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	json.NewEncoder(w).Encode(out)
 }

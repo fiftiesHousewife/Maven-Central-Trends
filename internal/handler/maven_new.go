@@ -6,11 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
 // Top-level prefixes to scan for new groups.
@@ -20,9 +21,6 @@ var prefixes = []string{
 	"org", "pl", "run", "se", "sh", "so", "tech", "top", "uk", "xyz",
 }
 
-const newCacheFile = "data/maven_new_cache.json"
-const groupsCacheFile = "data/maven_new_groups_cache.json"
-const scanProgressFile = "data/maven_scan_progress.json"
 
 // --- Scan progress tracking (package-level, goroutine-safe) ---
 
@@ -62,24 +60,6 @@ var (
 	fetchNewDone = make(chan struct{})
 )
 
-type newMonthCount struct {
-	Month     string `json:"month"`
-	NewGroups int    `json:"new_groups"`
-}
-
-type groupInfo struct {
-	GroupID        string `json:"group_id"`
-	FirstArtifact  string `json:"first_artifact"`
-	FirstPublished string `json:"first_published"`
-	ArtifactCount  int    `json:"artifact_count"`
-	LastUpdated    string `json:"last_updated"`
-	TotalVersions  int    `json:"total_versions,omitempty"`
-	License        string `json:"license,omitempty"`
-	SourceRepo     string `json:"source_repo,omitempty"`
-	CVECount       int    `json:"cve_count,omitempty"`
-	MaxCVESeverity string `json:"max_cve_severity,omitempty"`
-}
-
 type publishInfo struct {
 	FirstPublished time.Time
 	LastUpdated    time.Time
@@ -88,20 +68,6 @@ type publishInfo struct {
 	TotalVersions  int
 	License        string
 	SourceRepo     string
-}
-
-// --- Dedup ---
-
-func dedup(groups []groupInfo) []groupInfo {
-	seen := make(map[string]bool)
-	var result []groupInfo
-	for _, g := range groups {
-		if !seen[g.GroupID] {
-			seen[g.GroupID] = true
-			result = append(result, g)
-		}
-	}
-	return result
 }
 
 // --- Repo1 scraping ---
@@ -177,7 +143,7 @@ func firstPublishInfo(groupID string) (publishInfo, error) {
 
 		pkg := fmt.Sprintf("%s:%s", groupID, art)
 		u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
-			strings.ReplaceAll(pkg, ":", "%3A"))
+			urlEncode(pkg))
 
 		var resp *http.Response
 		for attempt := 0; attempt < 3; attempt++ {
@@ -247,105 +213,6 @@ func firstPublishInfo(groupID string) (publishInfo, error) {
 	return publishInfo{}, fmt.Errorf("no publish date found for %s (tried %d of %d artifacts)", groupID, tried, artCount)
 }
 
-// --- Cache I/O ---
-
-func loadGroupsCache() map[string][]groupInfo {
-	data, err := os.ReadFile(groupsCacheFile)
-	if err != nil {
-		return make(map[string][]groupInfo)
-	}
-	var cached map[string][]groupInfo
-	if err := json.Unmarshal(data, &cached); err != nil {
-		return make(map[string][]groupInfo)
-	}
-	return cached
-}
-
-func writeGroupsCache(groups map[string][]groupInfo) {
-	cleaned := make(map[string][]groupInfo)
-	for month, gs := range groups {
-		cleaned[month] = dedup(gs)
-	}
-	b, err := json.Marshal(cleaned)
-	if err != nil {
-		return
-	}
-	os.WriteFile(groupsCacheFile, b, 0644)
-}
-
-type scanProgressData struct {
-	CompletedPrefixes map[string]int `json:"completed_prefixes"`
-}
-
-func loadScanProgress() scanProgressData {
-	data, err := os.ReadFile(scanProgressFile)
-	if err != nil {
-		return scanProgressData{CompletedPrefixes: make(map[string]int)}
-	}
-	var sp scanProgressData
-	if err := json.Unmarshal(data, &sp); err != nil {
-		return scanProgressData{CompletedPrefixes: make(map[string]int)}
-	}
-	if sp.CompletedPrefixes == nil {
-		sp.CompletedPrefixes = make(map[string]int)
-	}
-	return sp
-}
-
-func saveScanProgress(sp scanProgressData) {
-	b, err := json.Marshal(sp)
-	if err != nil {
-		return
-	}
-	os.WriteFile(scanProgressFile, b, 0644)
-}
-
-func loadNewCache() ([]newMonthCount, bool) {
-	data, err := os.ReadFile(newCacheFile)
-	if err != nil {
-		return nil, false
-	}
-	var cached struct {
-		Months []newMonthCount `json:"months"`
-	}
-	if err := json.Unmarshal(data, &cached); err != nil {
-		return nil, false
-	}
-	if len(cached.Months) == 0 {
-		return nil, false
-	}
-	return cached.Months, true
-}
-
-func writeNewCache(months []newMonthCount) {
-	out := struct {
-		Months []newMonthCount `json:"months"`
-	}{months}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return
-	}
-	os.WriteFile(newCacheFile, b, 0644)
-}
-
-func saveNewMonths(monthCounts map[string]int) {
-	now := time.Now().UTC()
-	start := now.AddDate(-4, 0, 0)
-	start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
-
-	var months []newMonthCount
-	for m := start; m.Before(now); m = m.AddDate(0, 1, 0) {
-		if m.Year() == now.Year() && m.Month() == now.Month() && now.Day() < 30 {
-			continue
-		}
-		key := m.Format("2006-01")
-		months = append(months, newMonthCount{
-			Month:     key,
-			NewGroups: monthCounts[key],
-		})
-	}
-	writeNewCache(months)
-}
 
 // --- Main scan loop ---
 
@@ -366,50 +233,34 @@ func fetchNewGroups() {
 		scanStatus.mu.Unlock()
 	}()
 
-	progress := loadScanProgress()
-	monthGroups := loadGroupsCache()
-
-	// Rebuild monthCounts from cached group data
-	monthCounts := make(map[string]int)
-	for month, groups := range monthGroups {
-		monthCounts[month] = len(dedup(groups))
+	completedPrefixes, err := store.CompletedPrefixes()
+	if err != nil {
+		slog.Error("failed to load scan progress", "error", err)
+		completedPrefixes = make(map[string]int)
 	}
 
-	// Count total groups found so far
-	totalFound := 0
-	for _, gs := range monthGroups {
-		totalFound += len(dedup(gs))
-	}
+	totalFound := store.TotalGroups()
 
 	scanStatus.mu.Lock()
-	scanStatus.CompletedCount = len(progress.CompletedPrefixes)
+	scanStatus.CompletedCount = len(completedPrefixes)
 	scanStatus.TotalGroupsFound = totalFound
 	scanStatus.mu.Unlock()
 
 	// Check if all prefixes are done
 	allDone := true
 	for _, p := range prefixes {
-		if _, ok := progress.CompletedPrefixes[p]; !ok {
+		if _, ok := completedPrefixes[p]; !ok {
 			allDone = false
 			break
 		}
 	}
 	if allDone {
 		slog.Info("all prefixes already scanned", "prefixes", len(prefixes), "total_groups", totalFound)
-		saveNewMonths(monthCounts)
 		return
 	}
 
-	// Build global set of already-cached group IDs
-	cachedIDs := make(map[string]bool)
-	for _, gs := range monthGroups {
-		for _, g := range gs {
-			cachedIDs[g.GroupID] = true
-		}
-	}
-
 	for _, prefix := range prefixes {
-		if _, done := progress.CompletedPrefixes[prefix]; done {
+		if _, done := completedPrefixes[prefix]; done {
 			slog.Info("skipping completed prefix", "prefix", prefix)
 			continue
 		}
@@ -440,7 +291,7 @@ func fetchNewGroups() {
 			scanStatus.PrefixDone = i + 1
 			scanStatus.mu.Unlock()
 
-			if cachedIDs[groupID] {
+			if store.GroupExists(groupID) {
 				scanStatus.mu.Lock()
 				scanStatus.PrefixSkipped++
 				scanStatus.mu.Unlock()
@@ -454,19 +305,22 @@ func fetchNewGroups() {
 				continue
 			}
 
-			key := info.FirstPublished.Format("2006-01")
-			monthCounts[key]++
-			monthGroups[key] = append(monthGroups[key], groupInfo{
-				GroupID:        groupID,
-				FirstArtifact:  info.FirstArtifact,
-				FirstPublished: info.FirstPublished.Format("2006-01-02"),
-				ArtifactCount:  info.ArtifactCount,
-				LastUpdated:    info.LastUpdated.Format("2006-01-02"),
-				TotalVersions:  info.TotalVersions,
-				License:        info.License,
-				SourceRepo:     info.SourceRepo,
-			})
-			cachedIDs[groupID] = true
+			enrichedDeps := info.TotalVersions > 0
+			if err := store.UpsertGroup(store.Group{
+				GroupID:         groupID,
+				FirstArtifact:   info.FirstArtifact,
+				FirstPublished:  info.FirstPublished.Format("2006-01-02"),
+				ArtifactCount:   info.ArtifactCount,
+				LastUpdated:     info.LastUpdated.Format("2006-01-02"),
+				TotalVersions:   info.TotalVersions,
+				License:         info.License,
+				SourceRepo:      info.SourceRepo,
+				EnrichedDepsDev: enrichedDeps,
+			}); err != nil {
+				slog.Warn("failed to save group", "group", groupID, "error", err)
+				continue
+			}
+
 			newInPrefix++
 
 			scanStatus.mu.Lock()
@@ -475,59 +329,84 @@ func fetchNewGroups() {
 
 			slog.Info("new group found", "group", groupID, "artifact", info.FirstArtifact, "published", info.FirstPublished.Format("2006-01-02"))
 
-			// Write cache frequently: every 25 new groups
 			if newInPrefix%25 == 0 {
-				writeGroupsCache(monthGroups)
-				slog.Info("cache saved", "prefix", prefix, "new_in_prefix", newInPrefix, "subgroup", i+1, "of", len(subgroups))
+				slog.Info("progress", "prefix", prefix, "new_in_prefix", newInPrefix, "subgroup", i+1, "of", len(subgroups))
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		// Always save at end of prefix
-		writeGroupsCache(monthGroups)
-		progress.CompletedPrefixes[prefix] = len(subgroups)
-		saveScanProgress(progress)
+		store.SetPrefixComplete(prefix, len(subgroups))
 
 		scanStatus.mu.Lock()
-		scanStatus.CompletedCount = len(progress.CompletedPrefixes)
+		scanStatus.CompletedCount++
 		scanStatus.mu.Unlock()
 
 		elapsed := time.Since(prefixStart)
 		slog.Info("prefix complete", "prefix", prefix, "subgroups", len(subgroups), "new_groups", newInPrefix, "elapsed", elapsed.Round(time.Second))
 	}
 
-	slog.Info("scan complete", "total_groups", scanStatus.TotalGroupsFound)
-	saveNewMonths(monthCounts)
+	slog.Info("scan complete", "total_groups", store.TotalGroups())
 }
 
 // --- HTTP handlers ---
 
+// groupJSON is the JSON representation of a group for the API.
+type groupJSON struct {
+	GroupID        string `json:"group_id"`
+	FirstArtifact  string `json:"first_artifact"`
+	FirstPublished string `json:"first_published"`
+	ArtifactCount  int    `json:"artifact_count"`
+	LastUpdated    string `json:"last_updated"`
+	TotalVersions  int    `json:"total_versions,omitempty"`
+	License        string `json:"license,omitempty"`
+	SourceRepo     string `json:"source_repo,omitempty"`
+	CVECount       int    `json:"cve_count,omitempty"`
+	MaxCVESeverity string `json:"max_cve_severity,omitempty"`
+}
+
+func groupToJSON(g store.Group) groupJSON {
+	return groupJSON{
+		GroupID:        g.GroupID,
+		FirstArtifact:  g.FirstArtifact,
+		FirstPublished: g.FirstPublished,
+		ArtifactCount:  g.ArtifactCount,
+		LastUpdated:    g.LastUpdated,
+		TotalVersions:  g.TotalVersions,
+		License:        g.License,
+		SourceRepo:     g.SourceRepo,
+		CVECount:       g.CVECount,
+		MaxCVESeverity: g.MaxCVESeverity,
+	}
+}
+
 func MavenNew(w http.ResponseWriter, r *http.Request) {
-	groups := loadGroupsCache()
-	if len(groups) == 0 {
+	counts, err := store.NewGroupsPerMonth()
+	if err != nil || len(counts) == 0 {
 		http.Error(w, "data not yet available — fetch in progress", http.StatusServiceUnavailable)
 		return
 	}
 
 	now := time.Now().UTC()
-	start := now.AddDate(-4, 0, 0)
-	start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
+	currentMonth := now.Format("2006-01")
 
-	var months []newMonthCount
-	for m := start; m.Before(now); m = m.AddDate(0, 1, 0) {
-		if m.Year() == now.Year() && m.Month() == now.Month() && now.Day() < 30 {
+	// Filter to last 4 years, exclude current partial month
+	start := now.AddDate(-4, 0, 0)
+	startMonth := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01")
+
+	var months []store.MonthCount
+	for _, mc := range counts {
+		if mc.Month < startMonth {
 			continue
 		}
-		key := m.Format("2006-01")
-		months = append(months, newMonthCount{
-			Month:     key,
-			NewGroups: len(dedup(groups[key])),
-		})
+		if mc.Month == currentMonth && now.Day() < 30 {
+			continue
+		}
+		months = append(months, mc)
 	}
 
 	out := struct {
-		Months []newMonthCount `json:"months"`
+		Months []store.MonthCount `json:"months"`
 	}{months}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -536,18 +415,34 @@ func MavenNew(w http.ResponseWriter, r *http.Request) {
 
 func MavenNewGroups(w http.ResponseWriter, r *http.Request) {
 	month := r.URL.Query().Get("month")
-	groups := loadGroupsCache()
 
 	if month != "" {
+		groups, err := store.GroupsForMonth(month)
+		if err != nil {
+			http.Error(w, "database error", http.StatusInternalServerError)
+			return
+		}
+		result := make([]groupJSON, len(groups))
+		for i, g := range groups {
+			result[i] = groupToJSON(g)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(dedup(groups[month]))
+		json.NewEncoder(w).Encode(result)
 		return
 	}
 
-	cleaned := make(map[string][]groupInfo)
-	for m, gs := range groups {
-		cleaned[m] = dedup(gs)
+	byMonth, err := store.GroupsByMonth()
+	if err != nil {
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	result := make(map[string][]groupJSON)
+	for m, gs := range byMonth {
+		result[m] = make([]groupJSON, len(gs))
+		for i, g := range gs {
+			result[m][i] = groupToJSON(g)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cleaned)
+	json.NewEncoder(w).Encode(result)
 }

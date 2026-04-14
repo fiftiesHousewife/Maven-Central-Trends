@@ -4,251 +4,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
-	"time"
+
+	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
-func TestDedup(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    []groupInfo
-		wantLen  int
-		wantIDs  []string
-	}{
-		{
-			name:    "empty",
-			input:   nil,
-			wantLen: 0,
-		},
-		{
-			name: "no duplicates",
-			input: []groupInfo{
-				{GroupID: "com.foo"},
-				{GroupID: "com.bar"},
-			},
-			wantLen: 2,
-			wantIDs: []string{"com.foo", "com.bar"},
-		},
-		{
-			name: "removes duplicates preserving order",
-			input: []groupInfo{
-				{GroupID: "com.foo", FirstArtifact: "a"},
-				{GroupID: "com.bar", FirstArtifact: "b"},
-				{GroupID: "com.foo", FirstArtifact: "c"},
-				{GroupID: "com.baz", FirstArtifact: "d"},
-				{GroupID: "com.bar", FirstArtifact: "e"},
-			},
-			wantLen: 3,
-			wantIDs: []string{"com.foo", "com.bar", "com.baz"},
-		},
-		{
-			name: "keeps first occurrence",
-			input: []groupInfo{
-				{GroupID: "com.foo", FirstArtifact: "first"},
-				{GroupID: "com.foo", FirstArtifact: "second"},
-			},
-			wantLen: 1,
-			wantIDs: []string{"com.foo"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := dedup(tt.input)
-			if len(got) != tt.wantLen {
-				t.Errorf("dedup() returned %d items, want %d", len(got), tt.wantLen)
-			}
-			for i, id := range tt.wantIDs {
-				if i >= len(got) {
-					break
-				}
-				if got[i].GroupID != id {
-					t.Errorf("dedup()[%d].GroupID = %q, want %q", i, got[i].GroupID, id)
-				}
-			}
-			// Verify first occurrence is kept
-			if tt.name == "keeps first occurrence" && len(got) > 0 {
-				if got[0].FirstArtifact != "first" {
-					t.Errorf("dedup() kept %q, want %q", got[0].FirstArtifact, "first")
-				}
-			}
-		})
-	}
-}
-
-func TestGroupsCacheRoundTrip(t *testing.T) {
+func setupTestStore(t *testing.T) {
+	t.Helper()
 	dir := t.TempDir()
-	origFile := groupsCacheFile
-
-	// Temporarily override cache file path
-	tmpFile := filepath.Join(dir, "test_groups.json")
-
-	// Write test data
-	groups := map[string][]groupInfo{
-		"2024-01": {
-			{GroupID: "com.foo", FirstArtifact: "foo-core"},
-			{GroupID: "com.bar", FirstArtifact: "bar-lib"},
-			{GroupID: "com.foo", FirstArtifact: "foo-dup"}, // duplicate
-		},
-		"2024-02": {
-			{GroupID: "com.baz", FirstArtifact: "baz"},
-		},
+	if err := store.Open(filepath.Join(dir, "test.db")); err != nil {
+		t.Fatalf("Open: %v", err)
 	}
-
-	// Write directly (bypass writeGroupsCache which uses the const path)
-	cleaned := make(map[string][]groupInfo)
-	for month, gs := range groups {
-		cleaned[month] = dedup(gs)
-	}
-	b, err := json.Marshal(cleaned)
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(tmpFile, b, 0644)
-
-	// Read back
-	data, err := os.ReadFile(tmpFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var loaded map[string][]groupInfo
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify dedup happened on write
-	if len(loaded["2024-01"]) != 2 {
-		t.Errorf("expected 2 groups in 2024-01 after dedup, got %d", len(loaded["2024-01"]))
-	}
-	if len(loaded["2024-02"]) != 1 {
-		t.Errorf("expected 1 group in 2024-02, got %d", len(loaded["2024-02"]))
-	}
-
-	_ = origFile // suppress unused
-}
-
-func TestScanProgressRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	tmpFile := filepath.Join(dir, "test_progress.json")
-
-	sp := scanProgressData{
-		CompletedPrefixes: map[string]int{
-			"ai":  277,
-			"com": 12914,
-		},
-	}
-
-	b, err := json.Marshal(sp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(tmpFile, b, 0644)
-
-	data, err := os.ReadFile(tmpFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var loaded scanProgressData
-	if err := json.Unmarshal(data, &loaded); err != nil {
-		t.Fatal(err)
-	}
-
-	if loaded.CompletedPrefixes["ai"] != 277 {
-		t.Errorf("ai prefix count = %d, want 277", loaded.CompletedPrefixes["ai"])
-	}
-	if loaded.CompletedPrefixes["com"] != 12914 {
-		t.Errorf("com prefix count = %d, want 12914", loaded.CompletedPrefixes["com"])
-	}
-}
-
-func TestMavenNewHandler(t *testing.T) {
-	// Create a temp groups cache file
-	dir := t.TempDir()
-	tmpFile := filepath.Join(dir, "groups.json")
-
-	now := time.Now().UTC()
-	thisMonth := now.Format("2006-01")
-	lastMonth := now.AddDate(0, -1, 0).Format("2006-01")
-	twoMonthsAgo := now.AddDate(0, -2, 0).Format("2006-01")
-
-	groups := map[string][]groupInfo{
-		lastMonth: {
-			{GroupID: "com.foo"},
-			{GroupID: "com.bar"},
-		},
-		twoMonthsAgo: {
-			{GroupID: "com.baz"},
-		},
-		thisMonth: {
-			{GroupID: "com.current"}, // should be excluded if day < 30
-		},
-	}
-
-	b, _ := json.Marshal(groups)
-	os.WriteFile(tmpFile, b, 0644)
-
-	// We can't easily test the handler without overriding the file path,
-	// but we can test the month filtering logic directly
-	start := now.AddDate(-4, 0, 0)
-	start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
-
-	var months []newMonthCount
-	for m := start; m.Before(now); m = m.AddDate(0, 1, 0) {
-		if m.Year() == now.Year() && m.Month() == now.Month() && now.Day() < 30 {
-			continue
-		}
-		key := m.Format("2006-01")
-		months = append(months, newMonthCount{
-			Month:     key,
-			NewGroups: len(dedup(groups[key])),
-		})
-	}
-
-	// Verify current partial month is excluded (unless day >= 30)
-	for _, m := range months {
-		if m.Month == thisMonth && now.Day() < 30 {
-			t.Errorf("current month %s should be excluded when day < 30", thisMonth)
-		}
-	}
-
-	// Verify last month has data
-	found := false
-	for _, m := range months {
-		if m.Month == lastMonth {
-			if m.NewGroups != 2 {
-				t.Errorf("last month %s has %d groups, want 2", lastMonth, m.NewGroups)
-			}
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("last month %s not found in results", lastMonth)
-	}
-}
-
-func TestMavenNewGroupsHandler(t *testing.T) {
-	// Create temp cache
-	dir := t.TempDir()
-	tmpFile := filepath.Join(dir, "groups.json")
-
-	groups := map[string][]groupInfo{
-		"2024-06": {
-			{GroupID: "com.foo", FirstArtifact: "foo"},
-			{GroupID: "com.bar", FirstArtifact: "bar"},
-			{GroupID: "com.foo", FirstArtifact: "foo-dup"}, // duplicate
-		},
-	}
-
-	b, _ := json.Marshal(groups)
-	os.WriteFile(tmpFile, b, 0644)
-
-	// Test dedup on the data
-	result := dedup(groups["2024-06"])
-	if len(result) != 2 {
-		t.Errorf("expected 2 deduped groups, got %d", len(result))
-	}
+	t.Cleanup(func() { store.Close() })
 }
 
 func TestScanStatusJSON(t *testing.T) {
@@ -300,4 +68,156 @@ func TestScanStatusJSON(t *testing.T) {
 	scanStatus.CompletedCount = 0
 	scanStatus.TotalGroupsFound = 0
 	scanStatus.mu.Unlock()
+}
+
+func TestMavenNewHandler(t *testing.T) {
+	setupTestStore(t)
+
+	// Insert test groups
+	store.UpsertGroup(store.Group{GroupID: "com.foo", FirstPublished: "2024-06-15", FirstArtifact: "foo"})
+	store.UpsertGroup(store.Group{GroupID: "com.bar", FirstPublished: "2024-06-20", FirstArtifact: "bar"})
+	store.UpsertGroup(store.Group{GroupID: "com.baz", FirstPublished: "2024-07-10", FirstArtifact: "baz"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/new-groups", nil)
+	rec := httptest.NewRecorder()
+	MavenNew(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Months []store.MonthCount `json:"months"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+
+	// Find 2024-06 in the response
+	m := make(map[string]int)
+	for _, mc := range resp.Months {
+		m[mc.Month] = mc.NewGroups
+	}
+
+	if m["2024-06"] != 2 {
+		t.Errorf("2024-06 = %d, want 2", m["2024-06"])
+	}
+	if m["2024-07"] != 1 {
+		t.Errorf("2024-07 = %d, want 1", m["2024-07"])
+	}
+}
+
+func TestMavenNewHandler503WhenEmpty(t *testing.T) {
+	setupTestStore(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/new-groups", nil)
+	rec := httptest.NewRecorder()
+	MavenNew(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 with no data, got %d", rec.Code)
+	}
+}
+
+func TestMavenNewGroupsHandler(t *testing.T) {
+	setupTestStore(t)
+
+	store.UpsertGroup(store.Group{GroupID: "com.foo", FirstPublished: "2024-06-15", FirstArtifact: "foo"})
+	store.UpsertGroup(store.Group{GroupID: "com.bar", FirstPublished: "2024-06-20", FirstArtifact: "bar"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/new-groups/details?month=2024-06", nil)
+	rec := httptest.NewRecorder()
+	MavenNewGroups(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var groups []groupJSON
+	if err := json.Unmarshal(rec.Body.Bytes(), &groups); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	if len(groups) != 2 {
+		t.Errorf("got %d groups, want 2", len(groups))
+	}
+}
+
+func TestMavenNewGroupsHandlerNoDuplicates(t *testing.T) {
+	setupTestStore(t)
+
+	// Insert the same group twice — SQLite primary key handles dedup
+	store.UpsertGroup(store.Group{GroupID: "com.foo", FirstPublished: "2024-06-15", FirstArtifact: "foo-v1"})
+	store.UpsertGroup(store.Group{GroupID: "com.foo", FirstPublished: "2024-06-15", FirstArtifact: "foo-v2"})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/new-groups/details?month=2024-06", nil)
+	rec := httptest.NewRecorder()
+	MavenNewGroups(rec, req)
+
+	var groups []groupJSON
+	json.Unmarshal(rec.Body.Bytes(), &groups)
+
+	if len(groups) != 1 {
+		t.Errorf("got %d groups after upsert, want 1 (dedup)", len(groups))
+	}
+	if groups[0].FirstArtifact != "foo-v2" {
+		t.Errorf("expected updated artifact foo-v2, got %s", groups[0].FirstArtifact)
+	}
+}
+
+func TestGroupJSONSerialization(t *testing.T) {
+	g := groupJSON{
+		GroupID:        "com.example",
+		FirstArtifact:  "example-core",
+		FirstPublished: "2024-06-15",
+		ArtifactCount:  5,
+		LastUpdated:    "2026-03-01",
+		TotalVersions:  42,
+		License:        "Apache-2.0",
+		SourceRepo:     "https://github.com/example/example",
+		CVECount:       3,
+		MaxCVESeverity: "HIGH",
+	}
+
+	b, err := json.Marshal(g)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded groupJSON
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.TotalVersions != 42 {
+		t.Errorf("TotalVersions = %d, want 42", decoded.TotalVersions)
+	}
+	if decoded.License != "Apache-2.0" {
+		t.Errorf("License = %q, want Apache-2.0", decoded.License)
+	}
+	if decoded.CVECount != 3 {
+		t.Errorf("CVECount = %d, want 3", decoded.CVECount)
+	}
+}
+
+func TestGroupJSONOmitsEmptyEnrichment(t *testing.T) {
+	g := groupJSON{
+		GroupID:        "com.old",
+		FirstArtifact:  "old-lib",
+		FirstPublished: "2023-01-01",
+	}
+
+	b, _ := json.Marshal(g)
+	var m map[string]any
+	json.Unmarshal(b, &m)
+
+	if _, ok := m["total_versions"]; ok {
+		t.Error("total_versions should be omitted when zero")
+	}
+	if _, ok := m["license"]; ok {
+		t.Error("license should be omitted when empty")
+	}
+	if _, ok := m["cve_count"]; ok {
+		t.Error("cve_count should be omitted when zero")
+	}
 }

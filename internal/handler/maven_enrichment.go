@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"time"
+
+	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
 // --- deps.dev version detail types ---
@@ -54,16 +57,7 @@ func fetchVersionDetail(groupID, artifact, version string) (depsDevVersionDetail
 }
 
 func urlEncode(s string) string {
-	// Simple URL encoding for : character
-	result := ""
-	for _, c := range s {
-		if c == ':' {
-			result += "%3A"
-		} else {
-			result += string(c)
-		}
-	}
-	return result
+	return url.PathEscape(s)
 }
 
 // --- OSV types and functions ---
@@ -144,215 +138,162 @@ func StartEnrichment() {
 }
 
 func enrichWithDepsDevDetail() {
-	groups := loadGroupsCache()
-	total := 0
-	enriched := 0
-	skipped := 0
-
-	for _, gs := range groups {
-		total += len(gs)
+	unenriched, err := store.UnenrichedGroups("depsdev")
+	if err != nil {
+		slog.Error("failed to query unenriched groups", "error", err)
+		return
 	}
 
+	total := len(unenriched)
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = "deps.dev detail"
 	scanStatus.EnrichmentTotal = total
 	scanStatus.EnrichmentDone = 0
 	scanStatus.mu.Unlock()
 
-	slog.Info("deps.dev detail enrichment starting", "total_groups", total)
+	slog.Info("deps.dev detail enrichment starting", "unenriched", total)
 
-	updated := false
-	count := 0
-	for month, gs := range groups {
-		for i, g := range gs {
-			count++
-
-			// Skip if already enriched (has version count)
-			if g.TotalVersions > 0 {
-				skipped++
-				continue
-			}
-
-			// Need the first artifact to look up
-			if g.FirstArtifact == "" {
-				continue
-			}
-
-			// Get package info from deps.dev for version count
-			pkg := fmt.Sprintf("%s:%s", g.GroupID, g.FirstArtifact)
-			u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
-				urlEncode(pkg))
-
-			resp, err := httpClient.Get(u)
-			if err != nil {
-				time.Sleep(200 * time.Millisecond)
-				continue
-			}
-
-			if resp.StatusCode != 200 {
-				resp.Body.Close()
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			var result depsDevResponse
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
-
-			groups[month][i].TotalVersions = len(result.Versions)
-
-			// Get version detail for latest version
-			if len(result.Versions) > 0 {
-				latest := result.Versions[len(result.Versions)-1]
-				if latest.VersionKey.Version != "" {
-					detail, err := fetchVersionDetail(g.GroupID, g.FirstArtifact, latest.VersionKey.Version)
-					if err == nil {
-						if len(detail.Licenses) > 0 {
-							groups[month][i].License = detail.Licenses[0]
-						}
-						groups[month][i].SourceRepo = extractSourceRepo(detail)
-					}
-				}
-			}
-
-			updated = true
-			enriched++
-
-			scanStatus.mu.Lock()
-			scanStatus.EnrichmentDone = count
-			scanStatus.mu.Unlock()
-
-			if count%100 == 0 {
-				slog.Info("deps.dev detail progress", "done", count, "of", total, "enriched", enriched, "skipped", skipped)
-				if updated {
-					writeGroupsCache(groups)
-					updated = false
-				}
-			}
-
-			time.Sleep(100 * time.Millisecond)
+	enriched := 0
+	for i, g := range unenriched {
+		if g.FirstArtifact == "" {
+			continue
 		}
+
+		pkg := fmt.Sprintf("%s:%s", g.GroupID, g.FirstArtifact)
+		u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
+			urlEncode(pkg))
+
+		resp, err := httpClient.Get(u)
+		if err != nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		var result depsDevResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		totalVersions := len(result.Versions)
+		license := ""
+		sourceRepo := ""
+
+		if len(result.Versions) > 0 {
+			latest := result.Versions[len(result.Versions)-1]
+			if latest.VersionKey.Version != "" {
+				detail, err := fetchVersionDetail(g.GroupID, g.FirstArtifact, latest.VersionKey.Version)
+				if err == nil {
+					if len(detail.Licenses) > 0 {
+						license = detail.Licenses[0]
+					}
+					sourceRepo = extractSourceRepo(detail)
+				}
+			}
+		}
+
+		if err := store.UpdateDepsDevEnrichment(g.GroupID, totalVersions, license, sourceRepo); err != nil {
+			slog.Warn("failed to update depsdev enrichment", "group", g.GroupID, "error", err)
+		}
+		enriched++
+
+		scanStatus.mu.Lock()
+		scanStatus.EnrichmentDone = i + 1
+		scanStatus.mu.Unlock()
+
+		if (i+1)%100 == 0 {
+			slog.Info("deps.dev detail progress", "done", i+1, "of", total, "enriched", enriched)
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	if updated {
-		writeGroupsCache(groups)
-	}
-	slog.Info("deps.dev detail enrichment complete", "total", total, "enriched", enriched, "skipped", skipped)
+	slog.Info("deps.dev detail enrichment complete", "total", total, "enriched", enriched)
 }
 
 func enrichWithOSV() {
-	groups := loadGroupsCache()
-	total := 0
-	enriched := 0
-
-	for _, gs := range groups {
-		total += len(gs)
+	unenriched, err := store.UnenrichedGroups("osv")
+	if err != nil {
+		slog.Error("failed to query unenriched groups for OSV", "error", err)
+		return
 	}
 
+	total := len(unenriched)
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = "OSV CVEs"
 	scanStatus.EnrichmentTotal = total
 	scanStatus.EnrichmentDone = 0
 	scanStatus.mu.Unlock()
 
-	slog.Info("OSV enrichment starting", "total_groups", total)
+	slog.Info("OSV enrichment starting", "unenriched", total)
 
-	updated := false
-	count := 0
-	for month, gs := range groups {
-		for i, g := range gs {
-			count++
-			// Skip if already enriched
-			if g.CVECount > 0 || g.MaxCVESeverity != "" {
-				continue
-			}
-
-			pkg := g.GroupID + ":" + g.FirstArtifact
-			cveCount, maxSev, err := queryOSV("https://api.osv.dev", pkg)
-			if err != nil {
-				slog.Debug("OSV query failed", "pkg", pkg, "error", err)
-				time.Sleep(200 * time.Millisecond)
-				continue
-			}
-
-			if cveCount > 0 {
-				groups[month][i].CVECount = cveCount
-				groups[month][i].MaxCVESeverity = maxSev
-				updated = true
-				enriched++
-				slog.Info("CVEs found", "group", g.GroupID, "cves", cveCount, "severity", maxSev)
-			}
-
-			scanStatus.mu.Lock()
-			scanStatus.EnrichmentDone = count
-			scanStatus.mu.Unlock()
-
-			if count%100 == 0 {
-				slog.Info("OSV enrichment progress", "done", count, "of", total, "enriched", enriched)
-				if updated {
-					writeGroupsCache(groups)
-					updated = false
-				}
-			}
-
-			time.Sleep(100 * time.Millisecond)
+	enriched := 0
+	for i, g := range unenriched {
+		pkg := g.GroupID + ":" + g.FirstArtifact
+		cveCount, maxSev, err := queryOSV("https://api.osv.dev", pkg)
+		if err != nil {
+			slog.Debug("OSV query failed", "pkg", pkg, "error", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
+
+		if err := store.UpdateOSVEnrichment(g.GroupID, cveCount, maxSev); err != nil {
+			slog.Warn("failed to update OSV enrichment", "group", g.GroupID, "error", err)
+		}
+
+		if cveCount > 0 {
+			enriched++
+			slog.Info("CVEs found", "group", g.GroupID, "cves", cveCount, "severity", maxSev)
+		}
+
+		scanStatus.mu.Lock()
+		scanStatus.EnrichmentDone = i + 1
+		scanStatus.mu.Unlock()
+
+		if (i+1)%100 == 0 {
+			slog.Info("OSV enrichment progress", "done", i+1, "of", total, "enriched", enriched)
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	if updated {
-		writeGroupsCache(groups)
-	}
 	slog.Info("OSV enrichment complete", "total", total, "with_cves", enriched)
 }
 
 func enrichWithPortal() {
-	groups := loadGroupsCache()
-
-	// Collect unique group IDs
-	seen := make(map[string]bool)
-	var groupIDs []string
-	for _, gs := range groups {
-		for _, g := range gs {
-			if !seen[g.GroupID] {
-				seen[g.GroupID] = true
-				groupIDs = append(groupIDs, g.GroupID)
-			}
-		}
+	unenriched, err := store.UnenrichedGroups("portal")
+	if err != nil {
+		slog.Error("failed to query unenriched groups for portal", "error", err)
+		return
 	}
 
-	// Check which are already in popularity cache
-	popMu.RLock()
-	remaining := make([]string, 0)
-	for _, id := range groupIDs {
-		if _, ok := popCache[id]; !ok {
-			remaining = append(remaining, id)
-		}
-	}
-	popMu.RUnlock()
-
-	if len(remaining) == 0 {
-		slog.Info("Central Portal enrichment: all groups already cached")
+	if len(unenriched) == 0 {
+		slog.Info("Central Portal enrichment: all groups already enriched")
 		return
 	}
 
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = "Central Portal"
-	scanStatus.EnrichmentTotal = len(remaining)
+	scanStatus.EnrichmentTotal = len(unenriched)
 	scanStatus.EnrichmentDone = 0
 	scanStatus.mu.Unlock()
 
-	slog.Info("Central Portal enrichment starting", "remaining", len(remaining), "total", len(groupIDs))
+	slog.Info("Central Portal enrichment starting", "unenriched", len(unenriched))
 
-	for i, id := range remaining {
+	for i, g := range unenriched {
 		body, _ := json.Marshal(map[string]any{
 			"sortField":     "dependentOnCount",
 			"sortDirection": "desc",
 			"page":          0,
 			"size":          1,
-			"searchTerm":    "namespace:" + id,
+			"searchTerm":    "namespace:" + g.GroupID,
 		})
 
 		resp, err := httpClient.Post(
@@ -385,36 +326,34 @@ func enrichWithPortal() {
 		}
 		resp.Body.Close()
 
-		info := popularityInfo{GroupID: id}
+		depCount, appCount, orgCount := 0, 0, 0
 		if len(result.Components) > 0 {
 			c := result.Components[0]
-			info.DependentCount = c.DependentOnCount
-			info.AppCount = c.NsPopularityAppCount
-			info.OrgCount = c.NsPopularityOrgCount
+			depCount = c.DependentOnCount
+			appCount = c.NsPopularityAppCount
+			orgCount = c.NsPopularityOrgCount
 		}
 
-		popMu.Lock()
-		popCache[id] = info
-		popMu.Unlock()
+		if err := store.UpdatePortalEnrichment(g.GroupID, depCount, appCount, orgCount, 0); err != nil {
+			slog.Warn("failed to update portal enrichment", "group", g.GroupID, "error", err)
+		}
 
 		scanStatus.mu.Lock()
 		scanStatus.EnrichmentDone = i + 1
 		scanStatus.mu.Unlock()
 
 		if (i+1)%50 == 0 {
-			savePopularityCache()
-			slog.Info("Portal enrichment progress", "done", i+1, "of", len(remaining))
+			slog.Info("Portal enrichment progress", "done", i+1, "of", len(unenriched))
 		}
 
 		time.Sleep(3 * time.Second)
 	}
 
-	savePopularityCache()
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = ""
 	scanStatus.EnrichmentDone = 0
 	scanStatus.EnrichmentTotal = 0
 	scanStatus.mu.Unlock()
 
-	slog.Info("Central Portal enrichment complete", "enriched", len(remaining))
+	slog.Info("Central Portal enrichment complete", "enriched", len(unenriched))
 }

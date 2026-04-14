@@ -293,60 +293,144 @@ function update() {
         return Math.round(sum / window);
       });
 
-      chart.setOption({
-        backgroundColor: 'transparent',
-        tooltip: {
-          trigger: 'axis',
-          formatter: params => {
-            let html = params[0].name;
+      // Fetch one-and-done data to split bars into stacked segments
+      fetch('/api/one-and-done').then(r => r.ok ? r.json() : null).then(oad => {
+        let series, tooltipFmt;
+
+        if (oad && oad.length > 0) {
+          // Build lookup: month -> { one_version, multiple }
+          const oadMap = {};
+          oad.forEach(d => { oadMap[d.month] = d; });
+
+          // Split each bar: one-and-done (red bottom) + active (blue top)
+          // For months without enrichment data, show full bar in blue
+          const oneVer = labels.map((m, i) => {
+            const d = oadMap[m];
+            return d ? d.one_version : 0;
+          });
+          const active = labels.map((m, i) => {
+            const d = oadMap[m];
+            return d ? d.multiple : values[i];
+          });
+          // Unenriched remainder (total bar minus enriched portion)
+          const unenriched = labels.map((m, i) => {
+            const d = oadMap[m];
+            return d ? Math.max(0, values[i] - d.one_version - d.multiple) : 0;
+          });
+
+          tooltipFmt = params => {
+            const month = params[0].name;
+            let total = 0;
+            params.forEach(p => { if (p.value != null && p.seriesName !== '3-month trend') total += p.value; });
+            let html = month + ' — ' + total.toLocaleString() + ' new groups';
+            const d = oadMap[month];
+            if (d && d.total > 0) {
+              const pct = Math.round(d.one_version / d.total * 100);
+              html += ' (' + pct + '% one-and-done)';
+            }
             params.forEach(p => {
-              if (p.value != null) {
+              if (p.value != null && p.value > 0) {
                 html += '<br/>' + p.marker + ' ' + p.seriesName + ': ' + p.value.toLocaleString();
               }
             });
             return html;
-          },
-        },
-        xAxis: {
-          type: 'category',
-          data: labels,
-          axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 },
-          axisLine: { lineStyle: { color: '#1e293b' } },
-        },
-        yAxis: {
-          type: 'value',
-          axisLabel: { color: '#64748b' },
-          splitLine: { lineStyle: { color: '#1e293b' } },
-        },
-        series: [{
-          name: 'New groups',
-          type: 'bar',
-          data: values.map((v, i) => ({
-            value: v,
+          };
+
+          series = [{
+            name: 'One-and-done',
+            type: 'bar',
+            stack: 'groups',
+            data: oneVer,
+            itemStyle: { color: '#ef4444' },
+            emphasis: { focus: 'series' },
+            markLine: { symbol: 'none', data: markLines, silent: true },
+            barMaxWidth: 30,
+          }, {
+            name: 'Active (2+ versions)',
+            type: 'bar',
+            stack: 'groups',
+            data: active,
             itemStyle: { color: '#3b82f6' },
-          })),
-          markLine: {
+            emphasis: { focus: 'series' },
+            barMaxWidth: 30,
+          }, {
+            name: 'Not yet enriched',
+            type: 'bar',
+            stack: 'groups',
+            data: unenriched,
+            itemStyle: { color: '#334155' },
+            barMaxWidth: 30,
+          }, {
+            name: '3-month trend',
+            type: 'line',
+            data: trend,
+            smooth: true,
             symbol: 'none',
-            data: markLines,
-            silent: true,
+            lineStyle: { color: '#f59e0b', width: 2 },
+            z: 10,
+          }];
+        } else {
+          // No enrichment data yet — plain blue bars
+          tooltipFmt = params => {
+            let html = params[0].name;
+            params.forEach(p => {
+              if (p.value != null) html += '<br/>' + p.marker + ' ' + p.seriesName + ': ' + p.value.toLocaleString();
+            });
+            return html;
+          };
+          series = [{
+            name: 'New groups',
+            type: 'bar',
+            data: values,
+            itemStyle: { color: '#3b82f6' },
+            markLine: { symbol: 'none', data: markLines, silent: true },
+            barMaxWidth: 30,
+          }, {
+            name: '3-month trend',
+            type: 'line',
+            data: trend,
+            smooth: true,
+            symbol: 'none',
+            lineStyle: { color: '#f59e0b', width: 2 },
+            z: 10,
+          }];
+        }
+
+        chart.setOption({
+          backgroundColor: 'transparent',
+          tooltip: { trigger: 'axis', formatter: tooltipFmt },
+          xAxis: {
+            type: 'category',
+            data: labels,
+            axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 },
+            axisLine: { lineStyle: { color: '#1e293b' } },
           },
-          barMaxWidth: 30,
-        }, {
-          name: '3-month trend',
-          type: 'line',
-          data: trend,
-          smooth: true,
-          symbol: 'none',
-          lineStyle: { color: '#f59e0b', width: 2 },
-          z: 10,
-        }],
-        legend: {
-          show: true,
-          top: 5,
-          right: 20,
-          textStyle: { color: '#94a3b8', fontSize: 11 },
-        },
-        grid: { top: 50, bottom: 60, left: 50, right: 20 },
+          yAxis: {
+            type: 'value',
+            axisLabel: { color: '#64748b' },
+            splitLine: { lineStyle: { color: '#1e293b' } },
+          },
+          series: series,
+          legend: {
+            show: true,
+            top: 5,
+            right: 20,
+            textStyle: { color: '#94a3b8', fontSize: 11 },
+          },
+          grid: { top: 50, bottom: 60, left: 50, right: 20 },
+        });
+      }).catch(() => {
+        // Fall back without one-and-done overlay
+        chart.setOption({
+          backgroundColor: 'transparent',
+          tooltip: { trigger: 'axis' },
+          xAxis: { type: 'category', data: labels, axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 }, axisLine: { lineStyle: { color: '#1e293b' } } },
+          yAxis: { type: 'value', axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: '#1e293b' } } },
+          series: [{ name: 'New groups', type: 'bar', data: values, itemStyle: { color: '#3b82f6' }, markLine: { symbol: 'none', data: markLines, silent: true }, barMaxWidth: 30 },
+                   { name: '3-month trend', type: 'line', data: trend, smooth: true, symbol: 'none', lineStyle: { color: '#f59e0b', width: 2 }, z: 10 }],
+          legend: { show: true, top: 5, right: 20, textStyle: { color: '#94a3b8', fontSize: 11 } },
+          grid: { top: 50, bottom: 60, left: 50, right: 20 },
+        });
       });
 
       setTimeout(update, 60000);
