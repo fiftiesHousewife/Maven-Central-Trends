@@ -339,6 +339,25 @@ func TotalGroups() int {
 	return n
 }
 
+// AllGroupIDs returns all group IDs in the database.
+func AllGroupIDs() ([]string, error) {
+	rows, err := db.Query("SELECT group_id FROM groups ORDER BY group_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		result = append(result, id)
+	}
+	return result, rows.Err()
+}
+
 // --- Scan Progress CRUD ---
 
 // SetPrefixComplete marks a prefix scan as complete.

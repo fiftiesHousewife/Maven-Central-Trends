@@ -123,6 +123,108 @@ func listSubgroups(path string) ([]string, error) {
 	return dirs, nil
 }
 
+// deepenGroups discovers 3+ level groupIds by checking existing groups for
+// deeper subgroups. Runs after the initial scan.
+func deepenGroups() {
+	slog.Info("starting deep group scan")
+
+	scanStatus.mu.Lock()
+	scanStatus.EnrichmentPhase = "deep scan"
+	scanStatus.mu.Unlock()
+
+	existing, err := store.AllGroupIDs()
+	if err != nil {
+		slog.Error("failed to load groups for deep scan", "error", err)
+		return
+	}
+
+	scanStatus.mu.Lock()
+	scanStatus.EnrichmentTotal = len(existing)
+	scanStatus.EnrichmentDone = 0
+	scanStatus.mu.Unlock()
+
+	newFound := 0
+	for i, groupID := range existing {
+		path := strings.ReplaceAll(groupID, ".", "/")
+		entries, err := listSubgroups(path)
+		if err != nil {
+			scanStatus.mu.Lock()
+			scanStatus.EnrichmentDone = i + 1
+			scanStatus.mu.Unlock()
+			continue
+		}
+
+		// Check each entry: if it's NOT an artifact (no version-like subdirs), it's a deeper group
+		for _, entry := range entries {
+			subpath := path + "/" + entry
+			deepGroupID := groupID + "." + entry
+
+			if store.GroupExists(deepGroupID) {
+				continue
+			}
+
+			// Peek inside to see if this contains version directories (= artifact) or more dirs (= namespace)
+			subEntries, err := listSubgroups(subpath)
+			if err != nil || len(subEntries) == 0 {
+				continue
+			}
+
+			// If first entry starts with a digit, this is an artifact dir, skip
+			hasVersion := false
+			for _, se := range subEntries {
+				if len(se) > 0 && se[0] >= '0' && se[0] <= '9' {
+					hasVersion = true
+					break
+				}
+			}
+			if hasVersion {
+				continue
+			}
+
+			// This is a deeper namespace — register it as a group
+			info, err := firstPublishInfo(deepGroupID)
+			if err != nil {
+				continue
+			}
+
+			enrichedDeps := info.TotalVersions > 0
+			if err := store.UpsertGroup(store.Group{
+				GroupID:         deepGroupID,
+				FirstArtifact:   info.FirstArtifact,
+				FirstPublished:  info.FirstPublished.Format("2006-01-02"),
+				ArtifactCount:   info.ArtifactCount,
+				LastUpdated:     info.LastUpdated.Format("2006-01-02"),
+				TotalVersions:   info.TotalVersions,
+				License:         info.License,
+				SourceRepo:      info.SourceRepo,
+				EnrichedDepsDev: enrichedDeps,
+			}); err != nil {
+				continue
+			}
+
+			newFound++
+			scanStatus.mu.Lock()
+			scanStatus.TotalGroupsFound++
+			scanStatus.mu.Unlock()
+
+			slog.Info("deep group found", "group", deepGroupID, "artifact", info.FirstArtifact)
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		scanStatus.mu.Lock()
+		scanStatus.EnrichmentDone = i + 1
+		scanStatus.mu.Unlock()
+
+		if (i+1)%100 == 0 {
+			slog.Info("deep scan progress", "done", i+1, "of", len(existing), "new", newFound)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	slog.Info("deep scan complete", "new_groups", newFound)
+}
+
 // --- deps.dev lookup ---
 
 func firstPublishInfo(groupID string) (publishInfo, error) {
