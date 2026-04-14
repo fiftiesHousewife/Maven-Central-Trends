@@ -42,3 +42,5 @@ server.log
 # Playwright
 test-results/
 playwright-report/
+/server
+*.iml

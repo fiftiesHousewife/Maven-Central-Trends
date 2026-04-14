@@ -135,6 +135,7 @@ func StartEnrichment() {
 		enrichWithDepsDevDetail()
 		enrichWithOSV()
 		enrichWithPortal()
+		enrichWithGithub()
 	}()
 }
 
@@ -237,9 +238,11 @@ func enrichWithOSV() {
 
 	enriched := 0
 	for i, g := range unenriched {
-		// Query up to 5 artifacts per group to catch CVEs across the namespace
+		// Query up to 5 artifacts per group to catch CVEs across the namespace.
+		// Only fetch the artifact list from repo1 for groups with 6+ artifacts —
+		// for smaller groups, the first artifact covers most CVEs.
 		artifacts := []string{g.FirstArtifact}
-		if g.ArtifactCount > 1 {
+		if g.ArtifactCount >= 6 {
 			path := strings.ReplaceAll(g.GroupID, ".", "/")
 			if extra, err := listSubgroups(path); err == nil {
 				for _, a := range extra {
@@ -255,7 +258,6 @@ func enrichWithOSV() {
 
 		totalCVEs := 0
 		bestSev := ""
-		seenIDs := make(map[string]bool)
 
 		for _, art := range artifacts {
 			pkg := g.GroupID + ":" + art
@@ -269,8 +271,6 @@ func enrichWithOSV() {
 					bestSev = sev
 				}
 			}
-			_ = seenIDs // future: deduplicate by vuln ID
-			time.Sleep(50 * time.Millisecond)
 		}
 
 		if err := store.UpdateOSVEnrichment(g.GroupID, totalCVEs, bestSev); err != nil {

@@ -73,10 +73,21 @@ func migrate() error {
 		app_count INTEGER NOT NULL DEFAULT 0,
 		org_count INTEGER NOT NULL DEFAULT 0,
 		quality_score REAL NOT NULL DEFAULT 0,
+		contributor_count INTEGER NOT NULL DEFAULT 0,
+		primary_author TEXT NOT NULL DEFAULT '',
+		author_github_created TEXT NOT NULL DEFAULT '',
 		enriched_depsdev INTEGER NOT NULL DEFAULT 0,
 		enriched_osv INTEGER NOT NULL DEFAULT 0,
 		enriched_portal INTEGER NOT NULL DEFAULT 0,
+		enriched_github INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	);
+
+	CREATE TABLE IF NOT EXISTS contributors (
+		group_id TEXT NOT NULL,
+		login TEXT NOT NULL,
+		contributions INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (group_id, login)
 	);
 
 	CREATE TABLE IF NOT EXISTS scan_progress (
@@ -112,10 +123,14 @@ type Group struct {
 	DependentCount int
 	AppCount       int
 	OrgCount       int
-	QualityScore   float64
-	EnrichedDepsDev bool
-	EnrichedOSV     bool
-	EnrichedPortal  bool
+	QualityScore        float64
+	ContributorCount    int
+	PrimaryAuthor       string
+	AuthorGithubCreated string
+	EnrichedDepsDev     bool
+	EnrichedOSV         bool
+	EnrichedPortal      bool
+	EnrichedGithub      bool
 }
 
 // UpsertGroup inserts or updates a group row.
@@ -124,8 +139,9 @@ func UpsertGroup(g Group) error {
 		INSERT INTO groups (group_id, first_artifact, first_published, artifact_count, last_updated,
 			total_versions, license, source_repo, cve_count, max_cve_severity,
 			dependent_count, app_count, org_count, quality_score,
-			enriched_depsdev, enriched_osv, enriched_portal)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			contributor_count, primary_author, author_github_created,
+			enriched_depsdev, enriched_osv, enriched_portal, enriched_github)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(group_id) DO UPDATE SET
 			first_artifact = excluded.first_artifact,
 			first_published = excluded.first_published,
@@ -140,13 +156,18 @@ func UpsertGroup(g Group) error {
 			app_count = excluded.app_count,
 			org_count = excluded.org_count,
 			quality_score = excluded.quality_score,
+			contributor_count = excluded.contributor_count,
+			primary_author = excluded.primary_author,
+			author_github_created = excluded.author_github_created,
 			enriched_depsdev = excluded.enriched_depsdev,
 			enriched_osv = excluded.enriched_osv,
-			enriched_portal = excluded.enriched_portal`,
+			enriched_portal = excluded.enriched_portal,
+			enriched_github = excluded.enriched_github`,
 		g.GroupID, g.FirstArtifact, g.FirstPublished, g.ArtifactCount, g.LastUpdated,
 		g.TotalVersions, g.License, g.SourceRepo, g.CVECount, g.MaxCVESeverity,
 		g.DependentCount, g.AppCount, g.OrgCount, g.QualityScore,
-		boolToInt(g.EnrichedDepsDev), boolToInt(g.EnrichedOSV), boolToInt(g.EnrichedPortal))
+		g.ContributorCount, g.PrimaryAuthor, g.AuthorGithubCreated,
+		boolToInt(g.EnrichedDepsDev), boolToInt(g.EnrichedOSV), boolToInt(g.EnrichedPortal), boolToInt(g.EnrichedGithub))
 	return err
 }
 
@@ -177,27 +198,34 @@ func UpdatePortalEnrichment(groupID string, dependentCount, appCount, orgCount i
 	return err
 }
 
-// GroupByID returns a single group by its ID.
-func GroupByID(groupID string) (Group, error) {
+const groupSelectCols = `group_id, first_artifact, first_published, artifact_count, last_updated,
+	total_versions, license, source_repo, cve_count, max_cve_severity,
+	dependent_count, app_count, org_count, quality_score,
+	contributor_count, primary_author, author_github_created,
+	enriched_depsdev, enriched_osv, enriched_portal, enriched_github`
+
+func scanGroup(scanner interface{ Scan(...any) error }) (Group, error) {
 	var g Group
-	var ed, eo, ep int
-	err := db.QueryRow(`
-		SELECT group_id, first_artifact, first_published, artifact_count, last_updated,
-			total_versions, license, source_repo, cve_count, max_cve_severity,
-			dependent_count, app_count, org_count, quality_score,
-			enriched_depsdev, enriched_osv, enriched_portal
-		FROM groups WHERE group_id = ?`, groupID).Scan(
+	var ed, eo, ep, eg int
+	err := scanner.Scan(
 		&g.GroupID, &g.FirstArtifact, &g.FirstPublished, &g.ArtifactCount, &g.LastUpdated,
 		&g.TotalVersions, &g.License, &g.SourceRepo, &g.CVECount, &g.MaxCVESeverity,
 		&g.DependentCount, &g.AppCount, &g.OrgCount, &g.QualityScore,
-		&ed, &eo, &ep)
+		&g.ContributorCount, &g.PrimaryAuthor, &g.AuthorGithubCreated,
+		&ed, &eo, &ep, &eg)
 	if err != nil {
 		return Group{}, err
 	}
 	g.EnrichedDepsDev = ed == 1
 	g.EnrichedOSV = eo == 1
 	g.EnrichedPortal = ep == 1
+	g.EnrichedGithub = eg == 1
 	return g, nil
+}
+
+// GroupByID returns a single group by its ID.
+func GroupByID(groupID string) (Group, error) {
+	return scanGroup(db.QueryRow(`SELECT `+groupSelectCols+` FROM groups WHERE group_id = ?`, groupID))
 }
 
 // GroupExists checks whether a group_id is already in the database.
@@ -209,13 +237,7 @@ func GroupExists(groupID string) bool {
 
 // GroupsByMonth returns groups bucketed by their first_published month (YYYY-MM).
 func GroupsByMonth() (map[string][]Group, error) {
-	rows, err := db.Query(`
-		SELECT group_id, first_artifact, first_published, artifact_count, last_updated,
-			total_versions, license, source_repo, cve_count, max_cve_severity,
-			dependent_count, app_count, org_count, quality_score,
-			enriched_depsdev, enriched_osv, enriched_portal
-		FROM groups
-		ORDER BY first_published`)
+	rows, err := db.Query(`SELECT ` + groupSelectCols + ` FROM groups ORDER BY first_published`)
 	if err != nil {
 		return nil, err
 	}
@@ -223,38 +245,20 @@ func GroupsByMonth() (map[string][]Group, error) {
 
 	result := make(map[string][]Group)
 	for rows.Next() {
-		var g Group
-		var ed, eo, ep int
-		if err := rows.Scan(&g.GroupID, &g.FirstArtifact, &g.FirstPublished, &g.ArtifactCount, &g.LastUpdated,
-			&g.TotalVersions, &g.License, &g.SourceRepo, &g.CVECount, &g.MaxCVESeverity,
-			&g.DependentCount, &g.AppCount, &g.OrgCount, &g.QualityScore,
-			&ed, &eo, &ep); err != nil {
+		g, err := scanGroup(rows)
+		if err != nil {
 			return nil, err
 		}
-		g.EnrichedDepsDev = ed == 1
-		g.EnrichedOSV = eo == 1
-		g.EnrichedPortal = ep == 1
-
-		month := g.FirstPublished[:7] // "2024-01-15" -> "2024-01"
 		if len(g.FirstPublished) >= 7 {
-			month = g.FirstPublished[:7]
+			result[g.FirstPublished[:7]] = append(result[g.FirstPublished[:7]], g)
 		}
-		result[month] = append(result[month], g)
 	}
 	return result, rows.Err()
 }
 
 // GroupsForMonth returns all groups first published in a given month.
 func GroupsForMonth(month string) ([]Group, error) {
-	rows, err := db.Query(`
-		SELECT group_id, first_artifact, first_published, artifact_count, last_updated,
-			total_versions, license, source_repo, cve_count, max_cve_severity,
-			dependent_count, app_count, org_count, quality_score,
-			enriched_depsdev, enriched_osv, enriched_portal
-		FROM groups
-		WHERE first_published LIKE ?
-		ORDER BY first_published`,
-		month+"%")
+	rows, err := db.Query(`SELECT `+groupSelectCols+` FROM groups WHERE first_published LIKE ? ORDER BY first_published`, month+"%")
 	if err != nil {
 		return nil, err
 	}
@@ -262,17 +266,10 @@ func GroupsForMonth(month string) ([]Group, error) {
 
 	var result []Group
 	for rows.Next() {
-		var g Group
-		var ed, eo, ep int
-		if err := rows.Scan(&g.GroupID, &g.FirstArtifact, &g.FirstPublished, &g.ArtifactCount, &g.LastUpdated,
-			&g.TotalVersions, &g.License, &g.SourceRepo, &g.CVECount, &g.MaxCVESeverity,
-			&g.DependentCount, &g.AppCount, &g.OrgCount, &g.QualityScore,
-			&ed, &eo, &ep); err != nil {
+		g, err := scanGroup(rows)
+		if err != nil {
 			return nil, err
 		}
-		g.EnrichedDepsDev = ed == 1
-		g.EnrichedOSV = eo == 1
-		g.EnrichedPortal = ep == 1
 		result = append(result, g)
 	}
 	return result, rows.Err()
@@ -315,14 +312,10 @@ func UnenrichedGroups(phase string) ([]Group, error) {
 		col = "enriched_osv"
 	case "portal":
 		col = "enriched_portal"
+	case "github":
+		col = "enriched_github"
 	}
-	rows, err := db.Query(fmt.Sprintf(`
-		SELECT group_id, first_artifact, first_published, artifact_count, last_updated,
-			total_versions, license, source_repo, cve_count, max_cve_severity,
-			dependent_count, app_count, org_count, quality_score,
-			enriched_depsdev, enriched_osv, enriched_portal
-		FROM groups
-		WHERE %s = 0`, col))
+	rows, err := db.Query(fmt.Sprintf(`SELECT `+groupSelectCols+` FROM groups WHERE %s = 0`, col))
 	if err != nil {
 		return nil, err
 	}
@@ -330,17 +323,10 @@ func UnenrichedGroups(phase string) ([]Group, error) {
 
 	var result []Group
 	for rows.Next() {
-		var g Group
-		var ed, eo, ep int
-		if err := rows.Scan(&g.GroupID, &g.FirstArtifact, &g.FirstPublished, &g.ArtifactCount, &g.LastUpdated,
-			&g.TotalVersions, &g.License, &g.SourceRepo, &g.CVECount, &g.MaxCVESeverity,
-			&g.DependentCount, &g.AppCount, &g.OrgCount, &g.QualityScore,
-			&ed, &eo, &ep); err != nil {
+		g, err := scanGroup(rows)
+		if err != nil {
 			return nil, err
 		}
-		g.EnrichedDepsDev = ed == 1
-		g.EnrichedOSV = eo == 1
-		g.EnrichedPortal = ep == 1
 		result = append(result, g)
 	}
 	return result, rows.Err()
@@ -536,6 +522,91 @@ func VersionsByMonth() ([]VersionTrendStat, error) {
 		}
 		cumul += s.NewVersions
 		s.CumulVersions = cumul
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// UpsertContributor stores a contributor for a group.
+func UpsertContributor(groupID, login string, contributions int) error {
+	_, err := db.Exec(`
+		INSERT INTO contributors (group_id, login, contributions)
+		VALUES (?, ?, ?)
+		ON CONFLICT(group_id, login) DO UPDATE SET contributions = excluded.contributions`,
+		groupID, login, contributions)
+	return err
+}
+
+// UniqueContributorsByMonth returns unique new contributor counts per month.
+// A contributor is "new" in the month of the earliest group they contributed to.
+func UniqueContributorsByMonth() ([]MonthCount, error) {
+	rows, err := db.Query(`
+		SELECT substr(g.first_published, 1, 7) AS month, COUNT(DISTINCT c.login) AS cnt
+		FROM contributors c
+		JOIN groups g ON c.group_id = g.group_id
+		WHERE g.first_published != ''
+		GROUP BY month
+		ORDER BY month`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []MonthCount
+	for rows.Next() {
+		var mc MonthCount
+		if err := rows.Scan(&mc.Month, &mc.NewGroups); err != nil {
+			return nil, err
+		}
+		result = append(result, mc)
+	}
+	return result, rows.Err()
+}
+
+// UpdateGithubEnrichment updates contributor data for a group.
+func UpdateGithubEnrichment(groupID string, contributorCount int, primaryAuthor, authorCreated string) error {
+	_, err := db.Exec(`
+		UPDATE groups SET contributor_count = ?, primary_author = ?, author_github_created = ?, enriched_github = 1
+		WHERE group_id = ?`,
+		contributorCount, primaryAuthor, authorCreated, groupID)
+	return err
+}
+
+// ContributorStat holds per-month contributor data.
+type ContributorStat struct {
+	Month           string `json:"month"`
+	Total           int    `json:"total"`
+	SingleCommitter int    `json:"single_committer"`
+	MultiCommitter  int    `json:"multi_committer"`
+	NewAuthors      int    `json:"new_authors"`
+}
+
+// ContributorsByMonth returns contributor stats per month from GitHub-enriched groups.
+// "New author" = GitHub account created within 12 months of the group's first publish date.
+func ContributorsByMonth() ([]ContributorStat, error) {
+	rows, err := db.Query(`
+		SELECT substr(first_published, 1, 7) AS month,
+			COUNT(*) AS total,
+			SUM(CASE WHEN contributor_count <= 1 THEN 1 ELSE 0 END) AS single,
+			SUM(CASE WHEN contributor_count > 1 THEN 1 ELSE 0 END) AS multi,
+			SUM(CASE WHEN author_github_created != '' AND
+				substr(author_github_created, 1, 4) >= substr(first_published, 1, 4) - 1
+				THEN 1 ELSE 0 END) AS new_authors
+		FROM groups
+		WHERE enriched_github = 1 AND first_published != ''
+		GROUP BY month
+		ORDER BY month`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ContributorStat
+	for rows.Next() {
+		var s ContributorStat
+		if err := rows.Scan(&s.Month, &s.Total, &s.SingleCommitter, &s.MultiCommitter, &s.NewAuthors); err != nil {
+			return nil, err
+		}
 		result = append(result, s)
 	}
 	return result, rows.Err()

@@ -90,6 +90,13 @@ const indexHTML = `<!DOCTYPE html>
     <p>How many artifacts does each group contain? Stacked bars per month showing the mix of single-artifact vs multi-artifact groups.</p>
   </a>
 
+  <h3>Contributors</h3>
+
+  <a class="card" href="/contributors">
+    <h2>Solo vs Team Contributors</h2>
+    <p>How many groups are solo projects vs team efforts? Tracks single-committer rate and new-to-GitHub authors over time. Requires GITHUB_TOKEN.</p>
+  </a>
+
   <div class="api">
     <h2>API Endpoints</h2>
     <ul>

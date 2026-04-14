@@ -150,6 +150,30 @@ func SizeData(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ContributorData returns contributor stats per month.
+func ContributorData(w http.ResponseWriter, r *http.Request) {
+	data, err := store.ContributorsByMonth()
+	if err != nil || len(data) == 0 {
+		http.Error(w, "GitHub enrichment data not yet available", http.StatusServiceUnavailable)
+		return
+	}
+
+	now := time.Now().UTC()
+	start := now.AddDate(-4, 0, 0).Format("2006-01")
+	current := now.Format("2006-01")
+
+	var filtered []store.ContributorStat
+	for _, d := range data {
+		if d.Month < start || d.Month == current {
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(filtered)
+}
+
 // GroupsByPrefix returns new groups per month broken down by top-level prefix.
 func GroupsByPrefix(w http.ResponseWriter, r *http.Request) {
 	data, err := store.GroupsByMonthAndPrefix()

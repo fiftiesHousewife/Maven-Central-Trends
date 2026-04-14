@@ -52,6 +52,7 @@ func run() error {
 	mux.HandleFunc("GET /source-repos", handler.SourceRepoChart)
 	mux.HandleFunc("GET /popularity", handler.PopularityChart)
 	mux.HandleFunc("GET /size-distribution", handler.SizeChart)
+	mux.HandleFunc("GET /contributors", handler.ContributorsChart)
 
 	// API
 	mux.HandleFunc("GET /api/scan-progress", handler.ScanProgress)
@@ -68,6 +69,7 @@ func run() error {
 	mux.HandleFunc("GET /api/source-repos", handler.SourceRepoTrends)
 	mux.HandleFunc("GET /api/popularity", handler.PopularityData)
 	mux.HandleFunc("GET /api/size-distribution", handler.SizeData)
+	mux.HandleFunc("GET /api/contributors", handler.ContributorData)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
