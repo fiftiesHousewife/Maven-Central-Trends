@@ -4,26 +4,34 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-ISC-blue)](LICENSE)
 
-A Go service that visualises Maven Central publishing activity over time, with a focus on whether AI coding tools have increased the rate of new library creation.
+A Go service that tracks ~28,000 Maven Central namespaces to measure how AI coding tools affect library creation, quality, and community growth. 10 interactive charts with drill-down, powered by data from repo1.maven.org, deps.dev, OSV, Sonatype Central Portal, and GitHub.
 
 ![New Groups Per Month](docs/new-groups-chart.png)
 
-## Endpoints
+![Dashboard](docs/dashboard.png)
+
+## Charts
+
+All charts use ECharts with a dark theme, AI tool milestone annotations (Copilot GA, GPT-4, Claude releases, Cursor, etc.), and click-to-detail drill-down panels.
+
+| # | Chart | Route | What it shows |
+|---|-------|-------|---------------|
+| 1 | **New Groups Per Month** | `/new-groups-per-month` | New namespaces each month, stacked into one-and-done (red) vs active (blue). Click any bar to explore groups |
+| 2 | **New Groups By Prefix** | `/publishes-per-month` | Stacked area breaking down new groups by top-level prefix (com, org, io, dev, ai, etc.). Top 10 + Other |
+| 3 | **License Trends** | `/license-trends` | License distribution per month. Top 8 licenses stacked, click any segment to filter |
+| 4 | **Artifacts Per Month** | `/artifact-trends` | New artifacts across all groups with a linear trend line. Outliers capped at 500 |
+| 5 | **Versions Per Month** | `/version-trends` | Version counts from deps.dev enrichment with trend line. Outliers capped at 500 |
+| 6 | **Known CVEs** | `/cve-trends` | Groups with vulnerabilities by severity (Critical/High/Moderate/Low) + % affected trend |
+| 7 | **Source Repo Presence** | `/source-repos` | % of groups linking to a source repo over time, with trend line |
+| 8 | **Popularity Distribution** | `/popularity` | Log-scale histogram of dependent counts + top 25 most-depended-on groups |
+| 9 | **Group Size Distribution** | `/size-distribution` | Artifact count buckets (1 / 2-5 / 6-50 / 50+) stacked per month |
+| 10 | **Solo vs Team Contributors** | `/contributors` | Single-committer vs team projects over time, new-to-GitHub authors. Requires `GITHUB_TOKEN` |
+
+## API Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Index page with links to all charts and API endpoints |
-| `GET /health` | Health check |
-| `GET /new-groups-per-month` | New groups per month with one-and-done overlay |
-| `GET /publishes-per-month` | New groups by prefix (stacked area, top 10 + Other) |
-| `GET /license-trends` | License distribution per month |
-| `GET /artifact-trends` | New artifacts per month with trend line |
-| `GET /version-trends` | Version counts per month with trend line |
-| `GET /cve-trends` | CVEs by severity per month |
-| `GET /source-repos` | Source repo presence over time |
-| `GET /popularity` | Popularity distribution + top 25 groups |
-| `GET /size-distribution` | Group size (artifact count) distribution over time |
-| `GET /api/new-groups` | New groups per month JSON |
+| `GET /api/new-groups` | New groups per month |
 | `GET /api/new-groups/details?month=2025-07` | Groups created in a specific month |
 | `GET /api/scan-progress` | Live scan and enrichment progress |
 | `GET /api/groups-by-prefix` | New groups by prefix per month |
@@ -35,13 +43,14 @@ A Go service that visualises Maven Central publishing activity over time, with a
 | `GET /api/source-repos` | Source repo presence per month |
 | `GET /api/popularity` | Popularity distribution + top groups |
 | `GET /api/size-distribution` | Group size distribution by month |
+| `GET /api/contributors` | Solo vs team contributor stats per month |
 | `GET /api/group-popularity?namespace=com.foo` | On-demand popularity for a namespace |
 | `GET /api/new-artifacts-today` | New artifacts today (Solr) |
+| `GET /health` | Health check |
 
 ## Running
 
 ```bash
-# Install Go
 brew install go
 
 # Run directly
@@ -50,160 +59,86 @@ make run
 # Or build and run in background
 make build
 nohup ./bin/server > server.log 2>&1 &
+
+# With GitHub contributor enrichment (optional)
+GITHUB_TOKEN=$(gh auth token) ./bin/server
 ```
 
-The server starts on `:8080` (override with `PORT` env var). Set `LOG_LEVEL=debug` for verbose logging. On startup it begins background fetches to populate the SQLite database. The first run takes some time; subsequent runs resume from stored data.
+The server starts on `:8080` (override with `PORT`). Set `LOG_LEVEL=debug` for verbose logging.
+
+On first run, the server discovers ~28,000 Maven Central namespaces through a two-phase scan:
+1. **Initial scan**: Enumerates 26 top-level prefixes on repo1, discovering ~19,000 two-level groups
+2. **Deep scan**: Recurses into each group to find 3+ level namespaces (e.g. `com.fasterxml.jackson.core`), discovering ~9,000 more
+
+Subsequent runs resume from stored data via prefix-level checkpointing.
 
 ## Testing
 
-### Go tests
-
 ```bash
-make test
-
-# With coverage
-go test ./... -cover
+make test                          # Go unit tests
+go test ./... -cover               # with coverage
+npx playwright test                # E2E tests (server must be running)
+npx playwright test --headed       # with visible browser
 ```
 
 Coverage: config 100%, middleware 100%, store 84%, handler 19% (handler includes background goroutines that call external APIs).
-
-### Playwright E2E tests
-
-The server must be running on `:8080` before running Playwright tests.
-
-```bash
-npm install
-npx playwright install chromium
-
-npx playwright test
-npx playwright test --headed  # debug with visible browser
-```
 
 ## Architecture
 
 ### Data storage
 
-All data is stored in a SQLite database at `data/maven.db` (WAL mode).
+SQLite database at `data/maven.db` (WAL mode, single connection).
 
 | Table | Purpose |
 |-------|---------|
-| `groups` | All discovered Maven Central namespaces with enrichment data |
+| `groups` | ~28,000 Maven Central namespaces with enrichment data (license, CVEs, contributors, popularity) |
+| `contributors` | Per-group contributor list from GitHub |
 | `scan_progress` | Completed prefix scans for resume support |
 
-### Background tasks
+### Background pipeline
 
 Two goroutines start on boot:
 
-1. **New groups scan** — Enumerate 26 top-level prefixes on repo1, discover groups, call deps.dev for first-publish dates. Tracks completed prefixes for resume
-2. **Enrichment pipeline** — Runs after the scan completes, three sequential phases:
+1. **Group scan** — Enumerate 26 prefixes on repo1, discover groups, call deps.dev for first-publish dates
+2. **Enrichment pipeline** — Runs sequentially after scan completes:
+   - **Deep scan**: Discover 3+ level groupIds by recursing into existing groups
    - **deps.dev detail**: Fetch license, source repo, total version count (100ms throttle)
-   - **OSV CVEs**: Query api.osv.dev for vulnerability data across up to 5 artifacts per group (100ms throttle)
-   - **Central Portal**: Fetch popularity metrics from Sonatype (3s throttle, 60s backoff on 429)
+   - **OSV CVEs**: Query api.osv.dev across up to 5 artifacts per group (100ms throttle)
+   - **Central Portal**: Fetch popularity metrics (3s throttle, 60s backoff on 429)
+   - **GitHub**: Fetch contributor lists and account ages (1.2s throttle, requires `GITHUB_TOKEN`)
 
-### Charts
+### Data sources
 
-All charts use a dark theme and include AI tool milestone annotations. All are clickable — click any bar to drill into the groups created that month.
+| Source | What we get | Auth | Rate limits |
+|--------|-------------|------|-------------|
+| **repo1.maven.org** | Namespace/artifact enumeration | None | None observed |
+| **api.deps.dev** | Version history, licenses, source repos | None | None observed |
+| **api.osv.dev** | CVE counts and severity | None | None observed |
+| **central.sonatype.com** | Dependent counts, app counts | None | 429 after ~100 reqs |
+| **api.github.com** | Contributors, account ages | `GITHUB_TOKEN` | 5,000/hr |
 
-| Chart | Data source |
-|-------|-------------|
-| New groups per month | All 26 prefixes, with one-and-done stacked overlay |
-| New groups by prefix | Stacked area, top 10 prefixes + Other |
-| License trends | deps.dev enrichment (top 8 licenses + Other) |
-| Artifact trends | All groups, outliers capped at 500 |
-| Version trends | deps.dev enrichment, outliers capped at 500 |
-| CVE trends | OSV enrichment, severity breakdown per month |
-| Source repo presence | deps.dev enrichment, with/without repo stacked |
-| Popularity distribution | Portal enrichment, log-scale histogram + top 25 |
-| Group size distribution | Artifact count buckets per month |
+### How the scan works
 
-All charts use ECharts with a dark theme, AI tool milestone annotations, and click-to-detail drill-down panels.
+Maven Central organises packages as `groupId:artifactId` where `groupId` uses reverse-domain notation (e.g. `com.google.cloud`). repo1 exposes this as a directory tree: `com/google/cloud/`.
 
-## Data Sources
+The scanner:
+1. Lists 26 top-level prefixes (`ai`, `com`, `dev`, `io`, `org`, etc.)
+2. For each prefix, lists subdirectories to get two-level groups (`com.google`, `org.apache`)
+3. **Deep scan**: For each two-level group, checks children — if a child directory contains more directories (not version numbers), it's a deeper namespace and gets registered (e.g. `com.google.cloud`, `org.apache.commons`)
+4. For each group, calls deps.dev to find the first artifact's earliest publish date
+5. Heuristic: entries containing hyphens are skipped during deep scan (artifact names like `spring-boot-starter`, not namespace components like `boot`)
 
-### repo1.maven.org (Maven Central Repository)
-
-The actual Maven Central repository at `https://repo1.maven.org/maven2/`. Provides HTML directory listings of all groups, sub-groups, and artifacts. Used for **enumeration** — discovering what exists.
-
-- **URL pattern**: `https://repo1.maven.org/maven2/{group/path}/`
-- **No authentication** or rate limits
-- **Always current** — this IS the repository
-- **Limitations**: No search, no timestamps, HTML only (requires scraping)
-
-### api.deps.dev (Google Open Source Insights)
-
-Google's open-source dependency database at `https://api.deps.dev/v3alpha/`. Returns complete version history with precise publish timestamps. Used for **timestamping** and **enrichment**.
-
-- **URL pattern**: `https://api.deps.dev/v3alpha/systems/maven/packages/{groupId}%3A{artifactId}`
-- **No authentication** or rate limits observed
-- **Complete history** — every version with `publishedAt` in RFC 3339 format
-- **Limitations**: No namespace enumeration (must know exact groupId:artifactId)
-
-### api.osv.dev (OSV Vulnerability Database)
-
-Google's open-source vulnerability database. Returns CVE data for Maven packages.
-
-- **Endpoint**: `POST https://api.osv.dev/v1/query`
-- **Fields used**: CVE count, maximum severity (CRITICAL, HIGH, MODERATE, LOW)
-- **No authentication** required
-
-### central.sonatype.com (Sonatype Central Portal)
-
-Popularity metrics from the Sonatype Central Portal's internal browse API.
-
-- **Endpoint**: `POST https://central.sonatype.com/api/internal/browse/components`
-- **Fields used**: `dependentOnCount`, `nsPopularityAppCount`, `nsPopularityOrgCount`
-- **Rate limited** — returns 429 after ~100 rapid requests
-- **Undocumented internal API** — could change without notice
-
-## How It Works
-
-### New Groups Per Month (bar chart with one-and-done overlay)
-
-Counts how many new group namespaces first appeared each month. Bars are stacked: red = one-and-done (single version only), blue = active (2+ versions), grey = not yet enriched.
-
-**Process:**
-1. Scrape repo1 top-level directories for 26 prefixes to enumerate ~19,000 group namespaces
-2. For each group, call deps.dev to find the earliest version's `publishedAt` date
-3. Bucket by month; enrichment adds version counts for one-and-done classification
-4. Click any bar to see groups created that month, grouped by prefix, with lazy-loaded popularity data
-
-### Enrichment charts
-
-Built from the three enrichment phases. All feature milestone annotations and click-to-detail:
-
-- **Groups by prefix**: Stacked area showing top 10 prefixes (com, org, io, dev, etc.) + Other
-- **License trends**: Top 8 licenses stacked per month, click any segment to filter
-- **Artifact trends**: Total artifacts per month across all groups (outliers capped at 500)
-- **Version trends**: Total versions per month from deps.dev enrichment (outliers capped at 500)
-- **CVE trends**: Groups with known vulnerabilities by severity, % affected trend line
-- **Source repo presence**: % of groups linking to a source repository over time
-- **Popularity distribution**: Log-scale histogram of dependent counts + top 25 groups
-- **Group size distribution**: Artifact count buckets (1 / 2-5 / 6-50 / 50+) stacked per month
-
-### Partial Month Handling
+### Partial month handling
 
 The current month is excluded from all charts unless it's the 30th or 31st, to avoid misleadingly low bars for incomplete months.
 
-### Resume & Progress
-
-Data is stored in SQLite with prefix-level checkpointing. On restart:
-- Version fetcher skips namespaces already in the DB
-- Group scanner resumes from the last incomplete prefix
-- Enrichment resumes from unenriched groups (`enriched_*` flags)
-- The `/api/scan-progress` endpoint exposes live scan and enrichment state
-
 ## Other Approaches Attempted
 
-Several data sources were evaluated before settling on deps.dev + repo1. All had significant limitations:
-
-| Source | Data Current? | Historical? | Namespace Filter? | Rate Limits | Verdict |
-|--------|:---:|:---:|:---:|:---:|---------|
-| **Solr Search API** (`search.maven.org`) | Only for `org.apache.*` | Yes (pre-June 2025) | Wildcard `g:prefix.*` | Aggressive (returns HTML) | Index stale for most groups after June 2025 |
-| **Central Portal Components** (`central.sonatype.com`) | Yes | No (latest version only) | Exact namespace | 429 after ~100 requests | Cannot query historical time ranges |
-| **Central Portal Versions** | Yes | Broken sort | Exact namespace | Same as above | Sort by `publishedDate` returns random order |
-| **Hybrid Solr + Central Portal** | Partial | Partial | Both | Both | 9-month gap between Solr coverage and Portal usefulness |
-| **mvnrepository.com** | Yes (website) | Yes (website) | N/A | HTTP 403 for all API calls | No programmatic access |
-| **libraries.io** | Lags behind | Unreliable timestamps | Requires API key | Auth required | Maven data quality too low |
-| **repo1.maven.org alone** | Yes | No timestamps | Manual path traversal | None | No publish dates, only directory listings |
-| **deps.dev alone** | Yes | Yes | No enumeration | None observed | Cannot discover what exists, only look up known packages |
-| **deps.dev + repo1** | **Yes** | **Yes** | **Via repo1 scraping** | **None observed** | **Chosen approach** |
+| Source | Verdict |
+|--------|---------|
+| **Solr Search API** (`search.maven.org`) | Index stale for most groups after June 2025, aggressive rate limiting |
+| **Central Portal Components** | Latest version date only, can't query historical ranges |
+| **Central Portal Versions** | Sort by `publishedDate` is broken (random order) |
+| **mvnrepository.com** | HTTP 403 for all API calls |
+| **libraries.io** | Maven data quality too low, requires API key |
+| **deps.dev + repo1** | **Chosen approach** — repo1 for enumeration, deps.dev for timestamps |
