@@ -126,7 +126,18 @@ func listSubgroups(path string) ([]string, error) {
 // deepenGroups discovers 3+ level groupIds by checking existing groups for
 // deeper subgroups. Runs after the initial scan.
 func deepenGroups() {
-	slog.Info("starting deep group scan")
+	for pass := 1; ; pass++ {
+		newFound := deepenGroupsPass(pass)
+		if newFound == 0 {
+			slog.Info("deep scan converged, no new groups found", "passes", pass)
+			return
+		}
+		slog.Info("deep scan pass complete, running another", "pass", pass, "new_groups", newFound)
+	}
+}
+
+func deepenGroupsPass(pass int) int {
+	slog.Info("starting deep group scan", "pass", pass)
 
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = "deep scan"
@@ -135,7 +146,7 @@ func deepenGroups() {
 	existing, err := store.AllGroupIDs()
 	if err != nil {
 		slog.Error("failed to load groups for deep scan", "error", err)
-		return
+		return 0
 	}
 
 	scanStatus.mu.Lock()
@@ -173,6 +184,12 @@ func deepenGroups() {
 			deepGroupID := groupID + "." + entry
 
 			if store.GroupExists(deepGroupID) {
+				continue
+			}
+
+			// Heuristic: entries containing hyphens are almost always artifacts, not namespaces.
+			// Maven groupId components are typically single words (jackson, commons, spring).
+			if strings.Contains(entry, "-") {
 				continue
 			}
 
@@ -238,7 +255,8 @@ func deepenGroups() {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	slog.Info("deep scan complete", "new_groups", newFound)
+	slog.Info("deep scan pass complete", "pass", pass, "new_groups", newFound)
+	return newFound
 }
 
 // --- deps.dev lookup ---
@@ -349,6 +367,7 @@ func StartNewFetch() {
 	go fetchNewOnce.Do(func() {
 		defer close(fetchNewDone)
 		fetchNewGroups()
+		deepenGroups()
 	})
 }
 

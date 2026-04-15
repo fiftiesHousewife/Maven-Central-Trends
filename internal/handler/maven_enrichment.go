@@ -132,7 +132,6 @@ func StartEnrichment() {
 		<-fetchNewDone
 
 		slog.Info("starting background enrichment")
-		deepenGroups()
 		enrichWithDepsDevDetail()
 		enrichWithOSV()
 		enrichWithPortal()
