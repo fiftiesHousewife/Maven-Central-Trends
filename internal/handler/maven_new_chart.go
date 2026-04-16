@@ -237,7 +237,7 @@ function renderLevel(parentPath) {
       depthCounts[d] = (depthCounts[d] || 0) + 1;
     });
     const depthColors = { 2: '#3b82f6', 3: '#10b981', 4: '#f59e0b', 5: '#ef4444', 6: '#8b5cf6' };
-    const depthLabels = { 2: 'L2', 3: 'L3', 4: 'L4', 5: 'L5', 6: 'L6' };
+    const depthLabels = { 2: 'Level 2', 3: 'Level 3', 4: 'Level 4', 5: 'Level 5', 6: 'Level 6' };
     const depthBar = Object.keys(depthCounts).sort().map(d => {
       const pct = Math.max(2, Math.round(depthCounts[d] / node.groups.length * 100));
       return '<span title="Depth ' + d + ': ' + depthCounts[d] + ' groups" style="display:inline-block;height:6px;width:' + pct + '%;background:' + (depthColors[d] || '#64748b') + ';border-radius:2px"></span>';
@@ -273,7 +273,7 @@ function renderLevel(parentPath) {
         '</span>' +
         '<span class="date">' + node.groups.length + ' group' + (node.groups.length !== 1 ? 's' : '') + '</span>' +
       '</div>' +
-      (node.groups.length > 1 ? '<div style="display:flex;gap:1px;margin:2px 0;border-radius:3px;overflow:hidden">' + depthBar + '</div>' +
+      (node.groups.length > 1 ? '<div style="display:flex;gap:1px;margin:2px 0;border-radius:3px;overflow:hidden;max-width:120px">' + depthBar + '</div>' +
         '<div style="display:flex;gap:0.5rem">' + depthLegend + '</div>' : '') +
       (badges.length ? '<div class="badges">' + badges.join('') + '</div>' : '') +
       '<div class="meta">' + stats.join('<span class="sep"> &middot; </span>') + '</div>' +
