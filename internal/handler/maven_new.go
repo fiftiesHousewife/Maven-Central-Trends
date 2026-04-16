@@ -448,7 +448,15 @@ func fetchNewGroups() {
 
 			info, err := firstPublishInfo(groupID)
 			if err != nil {
-				slog.Debug("group skipped", "group", groupID, "error", err)
+				// Still register the group so the deep scan can discover its children.
+				// Pure namespace groups (org.apache, com.google) have no direct artifacts
+				// but contain important deeper groups.
+				slog.Debug("group has no direct artifacts, registering as namespace", "group", groupID, "error", err)
+				store.UpsertGroup(store.Group{GroupID: groupID})
+				newInPrefix++
+				scanStatus.mu.Lock()
+				scanStatus.TotalGroupsFound++
+				scanStatus.mu.Unlock()
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}

@@ -238,21 +238,15 @@ func enrichWithOSV() {
 
 	enriched := 0
 	for i, g := range unenriched {
-		// Query up to 5 artifacts per group to catch CVEs across the namespace.
-		// Only fetch the artifact list from repo1 for groups with 6+ artifacts —
-		// for smaller groups, the first artifact covers most CVEs.
-		artifacts := []string{g.FirstArtifact}
-		if g.ArtifactCount >= 6 {
-			path := strings.ReplaceAll(g.GroupID, ".", "/")
-			if extra, err := listSubgroups(path); err == nil {
-				for _, a := range extra {
-					if a != g.FirstArtifact {
-						artifacts = append(artifacts, a)
-					}
-					if len(artifacts) >= 5 {
-						break
-					}
-				}
+		// List all artifacts for the group from repo1 and query each for CVEs.
+		path := strings.ReplaceAll(g.GroupID, ".", "/")
+		artifacts, listErr := listSubgroups(path)
+		if listErr != nil || len(artifacts) == 0 {
+			if g.FirstArtifact != "" {
+				artifacts = []string{g.FirstArtifact}
+			} else {
+				store.UpdateOSVEnrichment(g.GroupID, 0, "")
+				continue
 			}
 		}
 
@@ -260,6 +254,10 @@ func enrichWithOSV() {
 		bestSev := ""
 
 		for _, art := range artifacts {
+			// Skip entries that are likely namespace dirs, not artifacts
+			if !strings.Contains(art, "-") && len(art) < 4 {
+				continue
+			}
 			pkg := g.GroupID + ":" + art
 			count, sev, err := queryOSV("https://api.osv.dev", pkg)
 			if err != nil {
