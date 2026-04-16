@@ -16,6 +16,12 @@ import (
 
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
+// Base URLs — overridden in tests.
+var (
+	repo1BaseURL   = "https://repo1.maven.org/maven2"
+	depsDevBaseURL = "https://api.deps.dev/v3alpha"
+)
+
 type depsDevResponse struct {
 	Versions []struct {
 		VersionKey struct {
@@ -84,7 +90,7 @@ type publishInfo struct {
 // --- Repo1 scraping ---
 
 func listSubgroups(path string) ([]string, error) {
-	u := fmt.Sprintf("https://repo1.maven.org/maven2/%s/", path)
+	u := fmt.Sprintf("%s/%s/", repo1BaseURL, path)
 
 	var resp *http.Response
 	var err error
@@ -289,8 +295,8 @@ func firstPublishInfo(groupID string) (publishInfo, error) {
 		tried++
 
 		pkg := fmt.Sprintf("%s:%s", groupID, art)
-		u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
-			urlEncode(pkg))
+		u := fmt.Sprintf("%s/systems/maven/packages/%s",
+			depsDevBaseURL, urlEncode(pkg))
 
 		var resp *http.Response
 		for attempt := 0; attempt < 3; attempt++ {

@@ -37,8 +37,8 @@ func extractSourceRepo(detail depsDevVersionDetail) string {
 // fetchVersionDetail gets license, advisories, and links for a specific version.
 func fetchVersionDetail(groupID, artifact, version string) (depsDevVersionDetail, error) {
 	pkg := fmt.Sprintf("%s:%s", groupID, artifact)
-	u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s/versions/%s",
-		urlEncode(pkg), urlEncode(version))
+	u := fmt.Sprintf("%s/systems/maven/packages/%s/versions/%s",
+		depsDevBaseURL, urlEncode(pkg), urlEncode(version))
 
 	resp, err := httpClient.Get(u)
 	if err != nil {
@@ -162,8 +162,8 @@ func enrichWithDepsDevDetail() {
 		}
 
 		pkg := fmt.Sprintf("%s:%s", g.GroupID, g.FirstArtifact)
-		u := fmt.Sprintf("https://api.deps.dev/v3alpha/systems/maven/packages/%s",
-			urlEncode(pkg))
+		u := fmt.Sprintf("%s/systems/maven/packages/%s",
+			depsDevBaseURL, urlEncode(pkg))
 
 		resp, err := httpClient.Get(u)
 		if err != nil {

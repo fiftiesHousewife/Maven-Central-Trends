@@ -14,6 +14,8 @@ import (
 	"github.com/pippanewbold/maven-central-trends/internal/store"
 )
 
+var githubBaseURL = "https://api.github.com"
+
 var githubOwnerRepo = regexp.MustCompile(`github\.com[:/]([^/]+)/([^/\s.]+?)(?:\.git)?(?:/.*)?$`)
 
 func parseGithubRepo(sourceRepo string) (owner, repo string, ok bool) {
@@ -119,7 +121,7 @@ func enrichWithGithub() {
 		seen[key] = true
 
 		// Fetch contributors list (up to 100)
-		contribURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/contributors?per_page=100&anon=false", owner, repo)
+		contribURL := fmt.Sprintf("%s/repos/%s/%s/contributors?per_page=100&anon=false", githubBaseURL, owner, repo)
 		resp, err := githubGet(contribURL, token)
 		if err != nil {
 			time.Sleep(time.Second)
@@ -172,7 +174,7 @@ func enrichWithGithub() {
 		if lookupUser == "" {
 			lookupUser = owner
 		}
-		resp3, err := githubGet(fmt.Sprintf("https://api.github.com/users/%s", lookupUser), token)
+		resp3, err := githubGet(fmt.Sprintf("%s/users/%s", githubBaseURL, lookupUser), token)
 		if err == nil && resp3.StatusCode == 200 {
 			var user githubUserInfo
 			json.NewDecoder(resp3.Body).Decode(&user)
