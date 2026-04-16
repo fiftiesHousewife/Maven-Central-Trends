@@ -175,14 +175,92 @@ const popObserver = new IntersectionObserver((entries) => {
   });
 }, { rootMargin: '200px' });
 
-function togglePrefix(id) {
-  const el = document.getElementById(id);
-  el.classList.toggle('expanded');
-  if (el.classList.contains('expanded')) {
-    el.querySelectorAll('.group-item').forEach(item => {
-      popObserver.observe(item);
-    });
+// Build a hierarchy tree from flat group list relative to a parent path
+function buildTree(groups, parentPath) {
+  const depth = parentPath ? parentPath.split('.').length : 0;
+  const children = {};
+
+  groups.forEach(g => {
+    const parts = g.group_id.split('.');
+    if (parts.length <= depth) return;
+    const nextPart = parts[depth];
+    const childKey = parentPath ? parentPath + '.' + nextPart : nextPart;
+    if (!children[childKey]) children[childKey] = { key: childKey, label: nextPart, groups: [], totalArtifacts: 0 };
+    children[childKey].groups.push(g);
+    children[childKey].totalArtifacts += g.artifact_count || 0;
+  });
+
+  return Object.values(children).sort((a, b) => b.groups.length - a.groups.length);
+}
+
+let currentMonth = '';
+let allGroupsForMonth = [];
+
+function renderLevel(parentPath) {
+  const nodes = buildTree(allGroupsForMonth, parentPath);
+  const title = parentPath
+    ? parentPath + '.* — ' + nodes.reduce((s, n) => s + n.groups.length, 0) + ' groups'
+    : currentMonth + ' — ' + allGroupsForMonth.length + ' new groups';
+  document.getElementById('groups-title').textContent = title;
+
+  // Breadcrumb
+  let breadcrumb = '';
+  if (parentPath) {
+    const parts = parentPath.split('.');
+    breadcrumb = '<div style="margin-bottom:0.75rem;font-size:0.8rem">';
+    breadcrumb += '<span style="cursor:pointer;color:#3b82f6" onclick="renderLevel(\'\')">' + currentMonth + '</span>';
+    for (let i = 0; i < parts.length; i++) {
+      const path = parts.slice(0, i + 1).join('.');
+      breadcrumb += ' <span style="color:#475569">/</span> ';
+      if (i < parts.length - 1) {
+        breadcrumb += '<span style="cursor:pointer;color:#3b82f6" onclick="renderLevel(\'' + path + '\')">' + parts[i] + '</span>';
+      } else {
+        breadcrumb += '<span style="color:#e2e8f0">' + parts[i] + '</span>';
+      }
+    }
+    breadcrumb += '</div>';
   }
+
+  document.getElementById('groups-list').innerHTML = breadcrumb + nodes.map(node => {
+    // Check if this node has deeper children or is a leaf
+    const hasChildren = node.groups.some(g => g.group_id !== node.key && g.group_id.startsWith(node.key + '.'));
+    const directMatch = node.groups.find(g => g.group_id === node.key);
+    const subgroupCount = node.groups.filter(g => g.group_id !== node.key).length;
+
+    const ns = node.key.replace(/\./g, '/');
+    const url = 'https://repo1.maven.org/maven2/' + ns + '/';
+
+    // Stats line
+    const stats = [];
+    if (directMatch && directMatch.first_published) stats.push(directMatch.first_published);
+    if (subgroupCount > 0) stats.push(subgroupCount + ' subgroup' + (subgroupCount !== 1 ? 's' : ''));
+    stats.push(node.totalArtifacts + ' artifact' + (node.totalArtifacts !== 1 ? 's' : ''));
+    if (directMatch && directMatch.license) stats.push(directMatch.license);
+
+    // Badges
+    const badges = [];
+    if (directMatch && directMatch.cve_count > 0) {
+      const sevClass = (directMatch.max_cve_severity === 'CRITICAL' || directMatch.max_cve_severity === 'HIGH') ? 'cve-high' : 'cve-mod';
+      badges.push('<span class="badge ' + sevClass + '">' + directMatch.cve_count + ' CVEs</span>');
+    }
+    if (directMatch && directMatch.total_versions > 0) {
+      badges.push('<span class="badge">' + directMatch.total_versions + ' ver</span>');
+    }
+
+    const clickable = hasChildren || subgroupCount > 0;
+    const onclick = clickable ? ' onclick="renderLevel(\'' + node.key + '\')" style="cursor:pointer"' : '';
+
+    return '<div class="group-item"' + onclick + '>' +
+      '<div class="top-row">' +
+        '<span class="name"' + (clickable ? ' style="color:#3b82f6"' : '') + '>' +
+          node.key + (clickable ? ' >' : '') +
+        '</span>' +
+        '<span class="date">' + node.groups.length + ' group' + (node.groups.length !== 1 ? 's' : '') + '</span>' +
+      '</div>' +
+      (badges.length ? '<div class="badges">' + badges.join('') + '</div>' : '') +
+      '<div class="meta">' + stats.join('<span class="sep"> &middot; </span>') + '</div>' +
+    '</div>';
+  }).join('');
 }
 
 function showGroups(month) {
@@ -193,30 +271,9 @@ function showGroups(month) {
         document.getElementById('groups-title').textContent = month + ' — no group data yet';
         document.getElementById('groups-list').innerHTML = '<p style="color:#94a3b8">Data still loading…</p>';
       } else {
-        groups.sort((a, b) => a.group_id.localeCompare(b.group_id));
-        document.getElementById('groups-title').textContent = month + ' — ' + groups.length + ' new groups';
-
-        const byPrefix = {};
-        groups.forEach(g => {
-          const prefix = g.group_id.split('.')[0];
-          if (!byPrefix[prefix]) byPrefix[prefix] = [];
-          byPrefix[prefix].push(g);
-        });
-
-        const prefixes = Object.keys(byPrefix).sort((a, b) => byPrefix[b].length - byPrefix[a].length);
-        document.getElementById('groups-list').innerHTML = prefixes.map(prefix => {
-          const items = byPrefix[prefix];
-          const id = 'prefix-' + prefix;
-          return '<div class="prefix-group">' +
-            '<div class="prefix-header" onclick="togglePrefix(\'' + id + '\')">' +
-              '<span class="prefix-name">' + prefix + '.*</span>' +
-              '<span class="prefix-count">' + items.length + ' group' + (items.length !== 1 ? 's' : '') + '</span>' +
-            '</div>' +
-            '<div class="prefix-items" id="' + id + '">' +
-              items.map(renderGroup).join('') +
-            '</div>' +
-          '</div>';
-        }).join('');
+        currentMonth = month;
+        allGroupsForMonth = groups;
+        renderLevel('');
       }
       document.getElementById('groups-panel').style.display = 'block';
       document.getElementById('groups-panel').scrollIntoView({ behavior: 'smooth' });
