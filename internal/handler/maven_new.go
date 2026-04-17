@@ -132,36 +132,32 @@ func listSubgroups(path string) ([]string, error) {
 // deepenGroups discovers 3+ level groupIds by checking existing groups for
 // deeper subgroups. Runs after the initial scan.
 func deepenGroups() {
+	// First pass scans all existing groups
+	toScan, _ := store.AllGroupIDs()
 	for pass := 1; ; pass++ {
-		newFound := deepenGroupsPass(pass)
-		if newFound == 0 {
-			slog.Info("deep scan converged, no new groups found", "passes", pass)
+		newFound, newIDs := deepenGroupsPass(pass, toScan)
+		if newFound < 10 {
+			slog.Info("deep scan converged", "passes", pass, "last_pass_found", newFound)
 			return
 		}
 		slog.Info("deep scan pass complete, running another", "pass", pass, "new_groups", newFound)
+		// Only scan the newly discovered groups on the next pass
+		toScan = newIDs
 	}
 }
 
-func deepenGroupsPass(pass int) int {
-	slog.Info("starting deep group scan", "pass", pass)
+func deepenGroupsPass(pass int, groupIDs []string) (int, []string) {
+	slog.Info("starting deep group scan", "pass", pass, "groups_to_scan", len(groupIDs))
 
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = "deep scan"
-	scanStatus.mu.Unlock()
-
-	existing, err := store.AllGroupIDs()
-	if err != nil {
-		slog.Error("failed to load groups for deep scan", "error", err)
-		return 0
-	}
-
-	scanStatus.mu.Lock()
-	scanStatus.EnrichmentTotal = len(existing)
+	scanStatus.EnrichmentTotal = len(groupIDs)
 	scanStatus.EnrichmentDone = 0
 	scanStatus.mu.Unlock()
 
 	newFound := 0
-	for i, groupID := range existing {
+	var newIDs []string
+	for i, groupID := range groupIDs {
 		path := strings.ReplaceAll(groupID, ".", "/")
 		entries, err := listSubgroups(path)
 		if err != nil {
@@ -242,6 +238,7 @@ func deepenGroupsPass(pass int) int {
 			}
 
 			newFound++
+			newIDs = append(newIDs, deepGroupID)
 			scanStatus.mu.Lock()
 			scanStatus.TotalGroupsFound++
 			scanStatus.mu.Unlock()
@@ -255,14 +252,14 @@ func deepenGroupsPass(pass int) int {
 		scanStatus.mu.Unlock()
 
 		if (i+1)%100 == 0 || candidates > 10 {
-			slog.Info("deep scan progress", "done", i+1, "of", len(existing), "new_groups", newFound, "current", groupID, "checked", checked)
+			slog.Info("deep scan progress", "done", i+1, "of", len(groupIDs), "new_groups", newFound, "current", groupID, "checked", checked)
 		}
 
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	slog.Info("deep scan pass complete", "pass", pass, "new_groups", newFound)
-	return newFound
+	return newFound, newIDs
 }
 
 // --- deps.dev lookup ---

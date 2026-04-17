@@ -210,7 +210,7 @@ func TestDeepenGroups_DiscoversDeeperLevels(t *testing.T) {
 	// Seed the DB with the parent group
 	store.UpsertGroup(store.Group{GroupID: "com.example", FirstArtifact: "my-artifact"})
 
-	// Run deep scan
+	// Run deep scan with just the seeded group
 	deepenGroups()
 
 	// com.example.deep should have been discovered
