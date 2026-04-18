@@ -238,16 +238,20 @@ func enrichWithOSV() {
 
 	enriched := 0
 	for i, g := range unenriched {
+		// Skip namespace-only groups with no artifacts
+		if g.FirstArtifact == "" {
+			store.UpdateOSVEnrichment(g.GroupID, 0, "")
+			scanStatus.mu.Lock()
+			scanStatus.EnrichmentDone = i + 1
+			scanStatus.mu.Unlock()
+			continue
+		}
+
 		// List all artifacts for the group from repo1 and query each for CVEs.
 		path := strings.ReplaceAll(g.GroupID, ".", "/")
 		artifacts, listErr := listSubgroups(path)
 		if listErr != nil || len(artifacts) == 0 {
-			if g.FirstArtifact != "" {
-				artifacts = []string{g.FirstArtifact}
-			} else {
-				store.UpdateOSVEnrichment(g.GroupID, 0, "")
-				continue
-			}
+			artifacts = []string{g.FirstArtifact}
 		}
 
 		totalCVEs := 0
