@@ -122,6 +122,68 @@ func queryOSV(baseURL string, pkg string) (count int, maxSeverity string, err er
 	return
 }
 
+// queryOSVBatch queries OSV for multiple packages in a single request.
+// Returns total CVE count and maximum severity across all packages.
+func queryOSVBatch(baseURL string, pkgs []string) (totalCVEs int, maxSev string) {
+	// Build batch query
+	type batchQuery struct {
+		Package struct {
+			Name      string `json:"name"`
+			Ecosystem string `json:"ecosystem"`
+		} `json:"package"`
+	}
+	var queries []batchQuery
+	for _, pkg := range pkgs {
+		q := batchQuery{}
+		q.Package.Name = pkg
+		q.Package.Ecosystem = "Maven"
+		queries = append(queries, q)
+	}
+
+	// Batch in chunks of 100 (OSV limit)
+	for i := 0; i < len(queries); i += 100 {
+		end := i + 100
+		if end > len(queries) {
+			end = len(queries)
+		}
+		chunk := queries[i:end]
+
+		body, _ := json.Marshal(map[string]any{"queries": chunk})
+		resp, err := httpClient.Post(baseURL+"/v1/querybatch", "application/json", bytes.NewReader(body))
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			continue
+		}
+
+		var result struct {
+			Results []struct {
+				Vulns []struct {
+					ID               string `json:"id"`
+					DatabaseSpecific struct {
+						Severity string `json:"severity"`
+					} `json:"database_specific"`
+				} `json:"vulns"`
+			} `json:"results"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+
+		for _, r := range result.Results {
+			totalCVEs += len(r.Vulns)
+			for _, v := range r.Vulns {
+				sev := v.DatabaseSpecific.Severity
+				if severityRank[sev] > severityRank[maxSev] {
+					maxSev = sev
+				}
+			}
+		}
+	}
+	return
+}
+
 // --- Background enrichment ---
 
 // StartEnrichment runs background enrichment after the main scan completes.
@@ -247,33 +309,26 @@ func enrichWithOSV() {
 			continue
 		}
 
-		// List all artifacts for the group from repo1 and query each for CVEs.
+		// List all artifacts for the group from repo1 and batch-query OSV.
 		path := strings.ReplaceAll(g.GroupID, ".", "/")
 		artifacts, listErr := listSubgroups(path)
 		if listErr != nil || len(artifacts) == 0 {
 			artifacts = []string{g.FirstArtifact}
 		}
 
-		totalCVEs := 0
-		bestSev := ""
-
+		// Filter to likely artifact names (skip namespace dirs)
+		var pkgs []string
 		for _, art := range artifacts {
-			// Skip entries that are likely namespace dirs, not artifacts
 			if !strings.Contains(art, "-") && len(art) < 4 {
 				continue
 			}
-			pkg := g.GroupID + ":" + art
-			count, sev, err := queryOSV("https://api.osv.dev", pkg)
-			if err != nil {
-				continue
-			}
-			if count > 0 {
-				totalCVEs += count
-				if severityRank[sev] > severityRank[bestSev] {
-					bestSev = sev
-				}
-			}
+			pkgs = append(pkgs, g.GroupID+":"+art)
 		}
+		if len(pkgs) == 0 {
+			pkgs = []string{g.GroupID + ":" + g.FirstArtifact}
+		}
+
+		totalCVEs, bestSev := queryOSVBatch("https://api.osv.dev", pkgs)
 
 		if err := store.UpdateOSVEnrichment(g.GroupID, totalCVEs, bestSev); err != nil {
 			slog.Warn("failed to update OSV enrichment", "group", g.GroupID, "error", err)
