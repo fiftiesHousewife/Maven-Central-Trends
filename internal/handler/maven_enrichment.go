@@ -168,7 +168,11 @@ func queryOSVBatch(baseURL string, pkgs []string) (totalCVEs int, maxSev string)
 				} `json:"vulns"`
 			} `json:"results"`
 		}
-		json.NewDecoder(resp.Body).Decode(&result)
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			slog.Debug("OSV batch decode failed", "error", err)
+			continue
+		}
 		resp.Body.Close()
 
 		for _, r := range result.Results {

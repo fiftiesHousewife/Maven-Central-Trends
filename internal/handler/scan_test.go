@@ -286,6 +286,74 @@ func TestEnrichWithOSV_AllArtifacts(t *testing.T) {
 	}
 }
 
+func TestQueryOSVBatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"results":[
+			{"vulns":[{"id":"CVE-1","database_specific":{"severity":"HIGH"}}]},
+			{"vulns":[]},
+			{"vulns":[{"id":"CVE-2","database_specific":{"severity":"CRITICAL"}},{"id":"CVE-3","database_specific":{"severity":"LOW"}}]}
+		]}`))
+	}))
+	defer server.Close()
+
+	count, sev := queryOSVBatch(server.URL, []string{"a:b", "c:d", "e:f"})
+	if count != 3 {
+		t.Errorf("total CVEs = %d, want 3", count)
+	}
+	if sev != "CRITICAL" {
+		t.Errorf("max severity = %q, want CRITICAL", sev)
+	}
+}
+
+func TestQueryOSVBatch_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer server.Close()
+
+	count, sev := queryOSVBatch(server.URL, []string{"a:b"})
+	if count != 0 {
+		t.Errorf("expected 0 CVEs on server error, got %d", count)
+	}
+	if sev != "" {
+		t.Errorf("expected empty severity on server error, got %q", sev)
+	}
+}
+
+func TestQueryOSVBatch_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{invalid json`))
+	}))
+	defer server.Close()
+
+	count, sev := queryOSVBatch(server.URL, []string{"a:b"})
+	if count != 0 {
+		t.Errorf("expected 0 CVEs on bad JSON, got %d", count)
+	}
+	if sev != "" {
+		t.Errorf("expected empty severity on bad JSON, got %q", sev)
+	}
+}
+
+func TestInRange(t *testing.T) {
+	tests := []struct {
+		month string
+		want  bool
+	}{
+		{"2020-01", false}, // too old
+		{"2024-06", true},  // within range
+		{"2025-12", true},  // recent
+	}
+	for _, tc := range tests {
+		got := inRange(tc.month)
+		if got != tc.want {
+			t.Errorf("inRange(%q) = %v, want %v", tc.month, got, tc.want)
+		}
+	}
+}
+
 func TestParseGithubRepo(t *testing.T) {
 	tests := []struct {
 		input     string

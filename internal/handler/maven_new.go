@@ -65,6 +65,26 @@ func (s *scanState) toJSON() []byte {
 	return b
 }
 
+func (s *scanState) setEnrichment(phase string, done, total int) {
+	s.mu.Lock()
+	s.EnrichmentPhase = phase
+	s.EnrichmentDone = done
+	s.EnrichmentTotal = total
+	s.mu.Unlock()
+}
+
+func (s *scanState) incEnrichment() {
+	s.mu.Lock()
+	s.EnrichmentDone++
+	s.mu.Unlock()
+}
+
+func (s *scanState) incGroups() {
+	s.mu.Lock()
+	s.TotalGroupsFound++
+	s.mu.Unlock()
+}
+
 func ScanProgress(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(scanStatus.toJSON())

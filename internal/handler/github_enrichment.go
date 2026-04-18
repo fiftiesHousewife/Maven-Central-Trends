@@ -16,7 +16,10 @@ import (
 
 var githubBaseURL = "https://api.github.com"
 
-var githubOwnerRepo = regexp.MustCompile(`github\.com[:/]([^/]+)/([^/\s.]+?)(?:\.git)?(?:/.*)?$`)
+var (
+	githubOwnerRepo = regexp.MustCompile(`github\.com[:/]([^/]+)/([^/\s.]+?)(?:\.git)?(?:/.*)?$`)
+	linkLastPageRe  = regexp.MustCompile(`page=(\d+)>; rel="last"`)
+)
 
 func parseGithubRepo(sourceRepo string) (owner, repo string, ok bool) {
 	m := githubOwnerRepo.FindStringSubmatch(sourceRepo)
@@ -111,8 +114,7 @@ func enrichWithGithub() {
 		key := strings.ToLower(owner + "/" + repo)
 
 		if seen[key] {
-			// Same repo as another group — copy the data
-			store.UpdateGithubEnrichment(g.GroupID, 0, "", "")
+			// Same repo as another group — skip, don't overwrite with zeros
 			scanStatus.mu.Lock()
 			scanStatus.EnrichmentDone = i + 1
 			scanStatus.mu.Unlock()
@@ -130,10 +132,10 @@ func enrichWithGithub() {
 		}
 
 		if wait := checkGithubRateLimit(resp); wait > 0 {
-			slog.Info("GitHub rate limit approaching, waiting", "wait", wait.Round(time.Second))
+			slog.Info("GitHub rate limit, backing off", "wait", wait.Round(time.Second))
 			resp.Body.Close()
 			time.Sleep(wait)
-			i-- // retry this group
+			// Don't mark as enriched — retry on next restart
 			continue
 		}
 
@@ -144,14 +146,15 @@ func enrichWithGithub() {
 				Login         string `json:"login"`
 				Contributions int    `json:"contributions"`
 			}
-			json.NewDecoder(resp.Body).Decode(&contribs)
+			if err := json.NewDecoder(resp.Body).Decode(&contribs); err != nil {
+				slog.Debug("GitHub contributors decode failed", "group", g.GroupID, "error", err)
+			}
 			contributorCount = len(contribs)
 
 			// Check Link header for repos with 100+ contributors
 			link := resp.Header.Get("Link")
 			if strings.Contains(link, `rel="last"`) {
-				re := regexp.MustCompile(`page=(\d+)>; rel="last"`)
-				if m := re.FindStringSubmatch(link); m != nil {
+				if m := linkLastPageRe.FindStringSubmatch(link); m != nil {
 					lastPage, _ := strconv.Atoi(m[1])
 					contributorCount = (lastPage - 1) * 100 // approximate
 				}

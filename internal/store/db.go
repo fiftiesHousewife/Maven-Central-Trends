@@ -97,7 +97,10 @@ func migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_groups_first_published ON groups(first_published);
-	CREATE INDEX IF NOT EXISTS idx_groups_enriched ON groups(enriched_depsdev, enriched_osv, enriched_portal);
+	CREATE INDEX IF NOT EXISTS idx_groups_enriched ON groups(enriched_depsdev, enriched_osv, enriched_portal, enriched_github);
+	CREATE INDEX IF NOT EXISTS idx_groups_first_artifact ON groups(first_artifact) WHERE first_artifact != '';
+	CREATE INDEX IF NOT EXISTS idx_groups_cve ON groups(enriched_osv, cve_count);
+	CREATE INDEX IF NOT EXISTS idx_groups_license ON groups(enriched_depsdev, license) WHERE license != '';
 	`
 	_, err := db.Exec(ddl)
 	if err != nil {
@@ -335,7 +338,9 @@ func UnenrichedGroups(phase string) ([]Group, error) {
 // TotalGroups returns the total number of groups in the database.
 func TotalGroups() int {
 	var n int
-	db.QueryRow("SELECT COUNT(*) FROM groups").Scan(&n)
+	if err := db.QueryRow("SELECT COUNT(*) FROM groups").Scan(&n); err != nil {
+		slog.Error("TotalGroups query failed", "error", err)
+	}
 	return n
 }
 
