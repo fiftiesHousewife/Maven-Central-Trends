@@ -152,16 +152,23 @@ func listSubgroups(path string) ([]string, error) {
 // deepenGroups discovers 3+ level groupIds by checking existing groups for
 // deeper subgroups. Runs after the initial scan.
 func deepenGroups() {
+	// Check if deep scan already completed (persisted as prefix "deep_scan_done")
+	completed, _ := store.CompletedPrefixes()
+	if _, done := completed["_deep_scan"]; done {
+		slog.Info("deep scan already completed, skipping")
+		return
+	}
+
 	// First pass scans all existing groups
 	toScan, _ := store.AllGroupIDs()
 	for pass := 1; ; pass++ {
 		newFound, newIDs := deepenGroupsPass(pass, toScan)
 		if newFound < 10 {
 			slog.Info("deep scan converged", "passes", pass, "last_pass_found", newFound)
+			store.SetPrefixComplete("_deep_scan", store.TotalGroups())
 			return
 		}
 		slog.Info("deep scan pass complete, running another", "pass", pass, "new_groups", newFound)
-		// Only scan the newly discovered groups on the next pass
 		toScan = newIDs
 	}
 }
