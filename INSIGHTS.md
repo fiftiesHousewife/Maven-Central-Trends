@@ -116,7 +116,7 @@ Version publishes by actual publish date (from deps.dev) show a clear upward tre
 | Claude 3 + Cursor | 6,666 | +14% |
 | Claude 4+ | **8,678** | **+49%** |
 
-Unlike the earlier version chart (which bucketed by group creation month and showed a misleading decline), this uses actual publish dates. The Maven Central ecosystem is publishing more versions, not fewer — confirming that AI tools are boosting productivity for existing projects as well as enabling new ones.
+The Maven Central ecosystem is publishing more versions, not fewer — confirming that productivity is rising for existing projects as well as new ones.
 
 ## License trends
 
