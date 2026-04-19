@@ -61,7 +61,7 @@ const versionsChartHTML = `<!DOCTYPE html>
 <div class="chart-wrap">
   <h1>Version Publishes Per Month — All Groups</h1>
   <p id="status">Loading enrichment data...</p>
-  <p id="sub">Total versions held by groups created each month (snapshot, not publish date). Recent months appear lower because newer groups have had less time to accumulate versions. This is a recency artefact, not a decline in publishing.</p>
+  <p id="sub">Versions published each month across all groups, by actual publish date from deps.dev.</p>
   <div id="chart"></div>
 </div>
 <div class="summary" id="summary"></div>
