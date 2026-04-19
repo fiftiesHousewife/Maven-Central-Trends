@@ -84,6 +84,12 @@ func migrate() error {
 		created_at TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 
+	CREATE TABLE IF NOT EXISTS monthly_activity (
+		month TEXT NOT NULL,
+		new_versions INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (month)
+	);
+
 	CREATE TABLE IF NOT EXISTS contributors (
 		group_id TEXT NOT NULL,
 		login TEXT NOT NULL,
@@ -349,8 +355,8 @@ func TotalGroups() int {
 // "truly new" namespaces. A group is "truly new" if it's a 2-level group (top-level
 // namespace like io.netty), OR if its 2-level parent was first published in the
 // same month (i.e. the whole namespace is new, not just a subgroup of an existing one).
-func NewGroupsPerMonthFiltered(newOnly bool) ([]MonthCount, error) {
-	if !newOnly {
+func NewGroupsPerMonthFiltered(filter string) ([]MonthCount, error) {
+	if filter != "new" && filter != "extensions" {
 		return NewGroupsPerMonth()
 	}
 
@@ -391,8 +397,10 @@ func NewGroupsPerMonthFiltered(newOnly bool) ([]MonthCount, error) {
 		}
 		parent := parts[0] + "." + parts[1]
 		parentMonth := parentMonths[parent]
-		// Truly new: 2-level group itself, or parent appeared same month
-		if len(parts) == 2 || parentMonth == month {
+		isNew := len(parts) == 2 || parentMonth == month
+		if filter == "new" && isNew {
+			monthlyCounts[month]++
+		} else if filter == "extensions" && !isNew {
 			monthlyCounts[month]++
 		}
 	}
@@ -621,6 +629,38 @@ func VersionsByMonth() ([]VersionTrendStat, error) {
 		cumul += s.NewVersions
 		s.CumulVersions = cumul
 		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// AddMonthlyVersions increments the version count for a month.
+func AddMonthlyVersions(month string, count int) error {
+	_, err := db.Exec(`
+		INSERT INTO monthly_activity (month, new_versions)
+		VALUES (?, ?)
+		ON CONFLICT(month) DO UPDATE SET new_versions = new_versions + ?`,
+		month, count, count)
+	return err
+}
+
+// MonthlyVersionActivity returns version publish counts by actual publish month.
+func MonthlyVersionActivity() ([]MonthCount, error) {
+	rows, err := db.Query(`
+		SELECT month, new_versions FROM monthly_activity
+		WHERE new_versions > 0
+		ORDER BY month`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []MonthCount
+	for rows.Next() {
+		var mc MonthCount
+		if err := rows.Scan(&mc.Month, &mc.NewGroups); err != nil {
+			return nil, err
+		}
+		result = append(result, mc)
 	}
 	return result, rows.Err()
 }

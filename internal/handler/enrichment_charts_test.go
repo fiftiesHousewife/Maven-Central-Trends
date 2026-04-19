@@ -124,7 +124,8 @@ func TestGrowthDataHandler(t *testing.T) {
 func TestVersionTrendsHandler(t *testing.T) {
 	setupTestStore(t)
 
-	store.UpsertGroup(store.Group{GroupID: "com.a", FirstPublished: "2024-06-15", FirstArtifact: "a", TotalVersions: 20, EnrichedDepsDev: true})
+	store.AddMonthlyVersions("2024-06", 50)
+	store.AddMonthlyVersions("2024-07", 30)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/version-trends", nil)
 	rec := httptest.NewRecorder()
@@ -134,7 +135,7 @@ func TestVersionTrendsHandler(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var data []store.VersionTrendStat
+	var data []store.MonthCount
 	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
 		t.Fatalf("parse: %v", err)
 	}

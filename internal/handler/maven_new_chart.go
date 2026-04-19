@@ -90,8 +90,9 @@ const newChartHTML2 = `<!DOCTYPE html>
   <p id="status">Loading data… scanning Maven Central namespaces.</p>
   <p id="scan-progress"></p>
   <div class="toggle-bar">
-    <button class="toggle-btn active" id="btn-all" onclick="setFilter('all')">All new groups</button>
-    <button class="toggle-btn" id="btn-new" onclick="setFilter('new')">Truly new namespaces only</button>
+    <button class="toggle-btn active" id="btn-all" onclick="setFilter('all')">All</button>
+    <button class="toggle-btn" id="btn-new" onclick="setFilter('new')">Truly new namespaces</button>
+    <button class="toggle-btn" id="btn-ext" onclick="setFilter('extensions')">Extensions of existing</button>
   </div>
   <div id="chart"></div>
 </div>
@@ -320,8 +321,11 @@ let currentFilter = 'all';
 
 function setFilter(f) {
   currentFilter = f;
-  document.getElementById('btn-all').className = 'toggle-btn' + (f === 'all' ? ' active' : '');
-  document.getElementById('btn-new').className = 'toggle-btn' + (f === 'new' ? ' active' : '');
+  ['all', 'new', 'ext'].forEach(id => {
+    document.getElementById('btn-' + id).className = 'toggle-btn' + (
+      (id === 'all' && f === 'all') || (id === 'new' && f === 'new') || (id === 'ext' && f === 'extensions')
+      ? ' active' : '');
+  });
   update();
 }
 
@@ -390,8 +394,11 @@ function update() {
         return Math.round(sum / window);
       });
 
-      // Fetch one-and-done data to split bars into stacked segments
-      fetch('/api/one-and-done').then(r => r.ok ? r.json() : null).then(oad => {
+      // Fetch one-and-done data to split bars — only for 'all' view
+      const oadPromise = currentFilter === 'all'
+        ? fetch('/api/one-and-done').then(r => r.ok ? r.json() : null)
+        : Promise.resolve(null);
+      oadPromise.then(oad => {
         let series, tooltipFmt;
 
         if (oad && oad.length > 0) {

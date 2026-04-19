@@ -560,8 +560,8 @@ func groupToJSON(g store.Group) groupJSON {
 }
 
 func MavenNew(w http.ResponseWriter, r *http.Request) {
-	newOnly := r.URL.Query().Get("filter") == "new"
-	counts, err := store.NewGroupsPerMonthFiltered(newOnly)
+	filter := r.URL.Query().Get("filter") // "new", "extensions", or "" (all)
+	counts, err := store.NewGroupsPerMonthFiltered(filter)
 	if err != nil || len(counts) == 0 {
 		http.Error(w, "data not yet available — fetch in progress", http.StatusServiceUnavailable)
 		return

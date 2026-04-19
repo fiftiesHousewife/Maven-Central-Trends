@@ -150,14 +150,14 @@ func GroupsByPrefix(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, filtered)
 }
 
-// VersionTrends returns version counts per month from enriched groups.
+// VersionTrends returns version publish counts by actual publish month.
 func VersionTrends(w http.ResponseWriter, r *http.Request) {
-	data, err := store.VersionsByMonth()
+	data, err := store.MonthlyVersionActivity()
 	if err != nil || len(data) == 0 {
 		http.Error(w, "enrichment data not yet available", http.StatusServiceUnavailable)
 		return
 	}
-	var filtered []store.VersionTrendStat
+	var filtered []store.MonthCount
 	for _, d := range data {
 		if inRange(d.Month) {
 			filtered = append(filtered, d)

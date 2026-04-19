@@ -61,7 +61,7 @@ const versionsChartHTML = `<!DOCTYPE html>
 <div class="chart-wrap">
   <h1>Version Publishes Per Month — All Groups</h1>
   <p id="status">Loading enrichment data...</p>
-  <p id="sub">Total versions published by groups created each month, from deps.dev enrichment. Outlier groups (500+ versions) are capped. Click any bar for details.</p>
+  <p id="sub">Versions published each month across all groups, from deps.dev enrichment. Click any bar for details.</p>
   <div id="chart"></div>
 </div>
 <div class="summary" id="summary"></div>
@@ -129,7 +129,7 @@ function update() {
       if (!data || data.length === 0) throw new Error('empty');
 
       const months = data.map(d => d.month);
-      const newVer = data.map(d => d.new_versions);
+      const newVer = data.map(d => d.new_groups);
 
       // Linear regression trend line
       const n = newVer.length;
@@ -200,7 +200,7 @@ function update() {
 
       const total = newVer.reduce((s, v) => s + v, 0);
       const recent6 = data.slice(-6);
-      const avgNew = Math.round(recent6.reduce((s, d) => s + d.new_versions, 0) / recent6.length);
+      const avgNew = Math.round(recent6.reduce((s, d) => s + d.new_groups, 0) / recent6.length);
 
       document.getElementById('status').textContent =
         total.toLocaleString() + ' versions tracked';

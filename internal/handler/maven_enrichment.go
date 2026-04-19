@@ -254,6 +254,17 @@ func enrichWithDepsDevDetail() {
 		license := ""
 		sourceRepo := ""
 
+		// Record version publish dates by month
+		monthCounts := make(map[string]int)
+		for _, v := range result.Versions {
+			if v.PublishedAt != "" && len(v.PublishedAt) >= 7 {
+				monthCounts[v.PublishedAt[:7]]++
+			}
+		}
+		for month, count := range monthCounts {
+			store.AddMonthlyVersions(month, count)
+		}
+
 		if len(result.Versions) > 0 {
 			latest := result.Versions[len(result.Versions)-1]
 			if latest.VersionKey.Version != "" {
