@@ -4,7 +4,9 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-ISC-blue)](LICENSE)
 
-A Go service that tracks ~28,000 Maven Central namespaces to measure how AI coding tools affect library creation, quality, and community growth. 10 interactive charts with drill-down, powered by data from repo1.maven.org, deps.dev, OSV, Sonatype Central Portal, and GitHub.
+A Go service that tracks ~74,000 Maven Central namespaces to measure how AI coding tools affect library creation, quality, and community growth. 10 interactive charts with drill-down, powered by data from repo1.maven.org, deps.dev, OSV, Sonatype Central Portal, and GitHub.
+
+**[Read the insights](INSIGHTS.md)** — analysis of Maven Central trends in the age of AI.
 
 ![New Groups Per Month](docs/new-groups-chart.png)
 

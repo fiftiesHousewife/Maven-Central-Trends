@@ -522,7 +522,7 @@ function update() {
             textStyle: { color: '#94a3b8', fontSize: 11 },
           },
           grid: { top: 50, bottom: 60, left: 50, right: 20 },
-        });
+        }, true); // notMerge=true to fully replace series on filter change
       }).catch(() => {
         // Fall back without one-and-done overlay
         chart.setOption({
@@ -534,7 +534,7 @@ function update() {
                    { name: '3-month trend', type: 'line', data: trend, smooth: true, symbol: 'none', lineStyle: { color: '#f59e0b', width: 2 }, z: 10 }],
           legend: { show: true, top: 5, right: 20, textStyle: { color: '#94a3b8', fontSize: 11 } },
           grid: { top: 50, bottom: 60, left: 50, right: 20 },
-        });
+        }, true);
       });
 
       setTimeout(update, 60000);
