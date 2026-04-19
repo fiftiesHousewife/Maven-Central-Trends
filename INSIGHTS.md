@@ -88,6 +88,36 @@ Average artifacts per group is slightly increasing (~8 to ~10), but **average ve
 
 **Important caveat on versions**: The Claude 4+ era shows only 6.6 average versions, but these groups are less than 12 months old — they simply haven't had time to publish many versions yet. However, even when controlling for age (comparing only groups 12+ months old), post-2024 groups average 8.4 versions vs 12.0 for pre-GPT-4 groups of similar age. **The decline is real, not just an artefact of recency.** Possible explanations: more experimental/one-off projects, faster iteration meaning fewer but larger releases, or a genuine shift in maintenance patterns.
 
+## Artifact creation is accelerating
+
+![Artifacts Per Month](docs/insights-artifacts.png)
+
+New artifacts added to Maven Central each month are trending firmly upward:
+
+| Era | Avg artifacts/month | Change |
+|-----|:-:|:-:|
+| Pre-GPT-4 | 3,288 | baseline |
+| GPT-4 year | 3,594 | +9% |
+| Claude 3 + Cursor | 3,999 | +22% |
+| Claude 4+ | **5,350** | **+63%** |
+
+This is a cleaner signal than group counts because it measures actual output — every artifact is a deployable library, not just a namespace registration. The 63% increase in the Claude 4+ era is striking.
+
+## Version publishing is rising
+
+![Versions Per Month](docs/insights-versions.png)
+
+Version publishes by actual publish date (from deps.dev) show a clear upward trend:
+
+| Era | Avg versions/month | Change |
+|-----|:-:|:-:|
+| Pre-GPT-4 | 5,828 | baseline |
+| GPT-4 year | 6,739 | +16% |
+| Claude 3 + Cursor | 6,666 | +14% |
+| Claude 4+ | **8,678** | **+49%** |
+
+Unlike the earlier version chart (which bucketed by group creation month and showed a misleading decline), this uses actual publish dates. The Maven Central ecosystem is publishing more versions, not fewer — confirming that AI tools are boosting productivity for existing projects as well as enabling new ones.
+
 ## License trends
 
 ![License Distribution](docs/insights-licenses.png)
