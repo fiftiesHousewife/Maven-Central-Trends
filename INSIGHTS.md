@@ -2,97 +2,119 @@
 
 Analysis of ~74,000 Maven Central namespaces tracked from April 2022 to March 2026, spanning the introduction of GitHub Copilot, GPT-4, Claude, Cursor, and other AI coding tools.
 
-## The Growth Story
+## The headline numbers
+
+Maven Central group creation has **accelerated sharply** since mid-2024, but the story differs depending on what you count:
+
+| Era | Monthly avg (all) | Monthly avg (truly new) | Extensions |
+|-----|:-:|:-:|:-:|
+| Pre-GPT-4 (Apr 2022 - Feb 2023) | 436 | 165 | 271 |
+| GPT-4 year (Mar 2023 - Feb 2024) | 432 | 167 | 265 |
+| Claude 3 + Cursor (Mar 2024 - Feb 2025) | 458 | 176 | 282 |
+| Claude 4+ era (Mar 2025 - Mar 2026) | **613** | **247** | **366** |
 
 ![New Groups Per Month](docs/insights-all-groups.png)
 
-Maven Central namespace creation has accelerated dramatically since mid-2024. But how much of this is genuinely new projects vs existing organisations expanding?
+Two signals emerge:
 
-### Truly new vs extensions
+1. **Existing projects are more productive.** Extensions of existing namespaces — established organisations adding subgroups — grew from 271/month to 366/month, a **35% increase**. These are teams like Google, Apache, and Eclipse shipping more sub-projects. AI tools are plausibly helping them ship faster.
 
-Of **23,892 groups** created in the last 4 years:
-- **9,348 (39%)** are truly new namespaces — organisations publishing to Maven Central for the first time
-- **14,544 (61%)** are extensions of existing namespaces — established projects adding subgroups
+2. **New entrants are surging.** Truly new namespaces — first-time publishers to Maven Central — grew from 165/month to 247/month, a **50% increase**. The acceleration is concentrated in late 2024 and 2025, coinciding with the maturation of AI coding assistants (Cursor, Claude Code, Windsurf).
 
-The distinction matters. A new `com.google.cloud.newservice` isn't a new entrant — it's Google extending their SDK. But `ai.newstartup:agent-lib` represents a genuinely new participant in the Java ecosystem.
+## Where the new groups come from
 
-**Key finding:** The rate of truly new namespaces has roughly doubled since GPT-4's release (March 2023), suggesting AI tools are indeed lowering the barrier to publishing on Maven Central.
+The fastest-growing prefixes in the last 12 months tell the story:
 
-### Where the growth is
+| Prefix | New subgroups | What it is |
+|--------|:-:|-----------|
+| `io.github.*` | 3,074 | JitPack — GitHub repos auto-published as Maven artifacts |
+| `io.gitee.*` | 81 | Chinese equivalent of JitPack |
+| `com.github.*` | 56 | Older JitPack convention |
+| `org.machanism.*` | 42 | Single project with deep namespace |
+| `org.finos.*` | 24 | Financial open-source foundation |
+| `io.quarkiverse.*` | 22 | Quarkus community extensions |
+| `org.eclipse.*` | 20 | Eclipse Foundation projects |
+| `org.apache.*` | 18 | Apache Software Foundation |
 
-The fastest-growing prefixes in the last 12 months:
+**JitPack dominates.** `io.github.*` alone accounts for 3,074 of the new subgroups — that's individual developers publishing their GitHub repos as Maven packages with zero setup. This is the clearest democratisation signal: the barrier to publishing on Maven Central has effectively dropped to "push to GitHub."
 
-| Prefix | New groups | Notes |
-|--------|-----------|-------|
-| `io.*` | 3,776 | Dominant — includes JitPack (`io.github.*`) |
-| `com.*` | 2,120 | Traditional corporate namespace |
-| `org.*` | 796 | Open-source organisations |
-| `dev.*` | 471 | Developer tools, growing fast |
-| `ai.*` | 127 | Small but didn't exist pre-2023 |
+## The one-and-done problem
 
-The `io.*` prefix dominates because JitPack publishes GitHub projects as `io.github.{username}`, making it the easiest path for individual developers. This is exactly the "democratisation" signal — solo developers publishing via the path of least resistance.
+Not all new groups represent sustained projects. The **one-and-done rate** — groups that published exactly one version and never updated — is rising:
 
-## One-and-Done: The Abandonment Signal
+| Era | Groups | One-and-done | Rate |
+|-----|:-:|:-:|:-:|
+| Pre-GPT-4 | 4,810 | 1,236 | 25.7% |
+| GPT-4 year | 5,106 | 1,358 | 26.6% |
+| Claude 3 + Cursor | 5,490 | 1,667 | **30.4%** |
+| Claude 4+ | 8,689 | 2,829 | **32.6%** |
 
-Of 66,696 enriched groups with version data:
-- **19,685 (30%)** published exactly one version and never updated
-- **47,011 (70%)** have multiple versions
+The one-and-done rate has risen from 26% to 33%. This tracks with the democratisation thesis: more people are publishing, but a higher fraction publish once and walk away. These could be:
+- AI-generated experimental projects
+- Homework/tutorial artifacts
+- Auto-published repos that were never intended as libraries
+- Projects that moved to a different package manager
 
-The one-and-done rate is a proxy for experimental or AI-generated projects that were published once and abandoned. The chart shows this rate over time — is it increasing in the AI era?
+## Are groups getting smaller?
 
-## License Trends
+| Era | Avg artifacts/group | Avg versions |
+|-----|:-:|:-:|
+| Pre-GPT-4 | 8.0 | 12.0 |
+| GPT-4 year | 9.1 | 11.1 |
+| Claude 3 + Cursor | 10.2 | 8.4 |
+| Claude 4+ | 9.3 | 6.6 |
+
+Average artifacts per group has been stable (~9), but **average versions is falling** — from 12.0 down to 6.6. Newer groups are publishing fewer versions, consistent with the one-and-done trend. Established-era groups had more time to iterate; AI-era groups are newer but also less actively maintained.
+
+## License trends
 
 ![License Distribution](docs/insights-licenses.png)
 
-| License | Groups | Share |
-|---------|--------|-------|
-| Apache-2.0 | 38,018 | 57% |
-| MIT | 11,527 | 17% |
-| non-standard | 9,672 | 15% |
-| GPL-3.0 | 1,486 | 2% |
-| LGPL-3.0 | 898 | 1% |
+| License | Pre-AI tools | AI era | Shift |
+|---------|:-:|:-:|:-:|
+| Apache-2.0 | 57% | 57% | Stable |
+| MIT | 16% | 24% | **+8pp** |
+| non-standard | 18% | 11% | -7pp |
+| GPL-3.0 | 3% | 2% | Stable |
 
-Apache-2.0 dominates the Java ecosystem, but MIT is growing faster in recent months — possibly reflecting a shift toward simpler licensing driven by individual developers and AI-generated projects. The "non-standard" category includes custom licenses that don't map to SPDX identifiers.
+MIT is gaining share at the expense of non-standard/custom licenses. The Java ecosystem has traditionally favoured Apache-2.0, but newer (often solo) developers default to MIT — the license most AI tools suggest.
 
-## Source Repository Presence
+## Source transparency
 
 ![Source Repo Presence](docs/insights-repos.png)
 
-The vast majority of groups link to a GitHub source repository — a trend that's been stable or slightly increasing. This suggests that even AI-assisted projects maintain source transparency, likely because deps.dev automatically extracts repo links from POM metadata.
+Source repository linkage has remained remarkably stable at **~96%** across all eras. Almost every Maven Central group links to a GitHub repo. This is partly a JitPack effect (the repo IS the source), partly because modern build tools (Maven Central Publisher, Gradle) require or encourage POM metadata including SCM links.
 
-## Security: Known Vulnerabilities
+## Security
 
-Of **44,768 OSV-enriched groups**, **397 have known CVEs** (~0.9%). While this seems low, it's concentrated in the most widely-used packages — the top vulnerable groups include:
+Of 44,768 OSV-enriched groups, **397 (0.9%) have known CVEs**. The rate is low because most CVEs affect a small number of widely-used packages. The top vulnerable groups account for a disproportionate share:
 
-- `io.netty` — 12 CVEs (CRITICAL)
-- `org.yaml:snakeyaml` — 8 CVEs (HIGH)
-- `org.bouncycastle` — 9 CVEs (MODERATE)
-- `com.fasterxml.jackson.core` — 69 CVEs across artifacts
+| Group | CVEs | Severity |
+|-------|:-:|---------|
+| `com.fasterxml.jackson.core` | 69 | CRITICAL |
+| `org.apache.struts` | 60 | CRITICAL |
+| `org.springframework` | 16+ | HIGH |
+| `io.netty` | 12 | CRITICAL |
+| `org.bouncycastle` | 9 | MODERATE |
 
-The CVE rate for groups created after 2024 is worth watching — are AI-era groups more or less likely to ship with known vulnerabilities?
+An open question: are AI-era groups more or less likely to depend on vulnerable packages? This requires dependency graph analysis beyond what we currently track.
 
-## Namespace Depth
+## Open questions
 
-Maven Central groups range from 2 to 8 levels deep:
+1. **Solo committer rate** — once GitHub enrichment completes, what % of new groups are single-developer projects? Is this the "democratisation" signal we expect?
+2. **JitPack vs traditional publishing** — is the growth real library creation, or just GitHub repos being auto-published?
+3. **Quality metrics** — for the top 100 most-depended-on groups, do commit frequency, issue resolution, and code size differ between pre-AI and AI-era groups?
+4. **Dependency patterns** — do AI-era groups have more or fewer dependencies? Shallower or deeper dependency trees?
 
-| Depth | Groups | Example |
-|-------|--------|---------|
-| 2 | 19,013 | `io.netty` |
-| 3 | 41,798 | `com.google.cloud` |
-| 4 | 4,985 | `com.fasterxml.jackson.core` |
-| 5+ | 900 | `org.apache.tomee.patch.services` |
+## Methodology
 
-Depth 3 dominates — the standard `tld.org.project` pattern. Shallower groups (depth 2) tend to be older, established projects. The growth in depth-3 groups aligns with the increase in new namespaces.
-
-## Open Questions
-
-These insights raise several questions for further investigation:
-
-1. **Solo committer rate** — once GitHub enrichment completes, what % of new groups are single-developer projects? Is this increasing?
-2. **Time to second version** — are AI-era groups iterating faster, or abandoning more?
-3. **Quality metrics** — for the top 100 most-depended-on groups, what do commit patterns, issue resolution rates, and code size tell us about development practices?
-4. **JitPack effect** — how much of the growth is JitPack (`io.github.*`) vs traditional Maven publishing? Does JitPack usage correlate with AI tool adoption?
+- **Data source**: repo1.maven.org for enumeration, deps.dev for version history and metadata, OSV for CVEs, Sonatype Central Portal for popularity
+- **Coverage**: 74,461 groups across 26 top-level prefixes, scanned to 8 levels deep
+- **Time range**: April 2022 — March 2026 (48 months)
+- **"Truly new" definition**: A group whose 2-level parent (e.g. `com.example`) was first published in the same month — meaning the whole namespace is new, not a subgroup of an established project
+- **"One-and-done" definition**: A group whose primary artifact has total_versions <= 1 from deps.dev
+- **Outlier handling**: Groups with 500+ artifacts (e.g. org.mvnpm) are capped in trend calculations
 
 ---
 
-*Data collected by [Maven Central Trends](README.md). Last updated April 2026.*
+*Data collected by [Maven Central Trends](README.md). Interactive charts at `http://localhost:8080`. Last updated April 2026.*

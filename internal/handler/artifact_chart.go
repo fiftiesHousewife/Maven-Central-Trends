@@ -131,15 +131,14 @@ function update() {
       const months = data.map(d => d.month);
       const newArt = data.map(d => d.new_artifacts);
 
-      // Linear regression trend line
-      const n = newArt.length;
-      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-      for (let i = 0; i < n; i++) {
-        sumX += i; sumY += newArt[i]; sumXY += i * newArt[i]; sumX2 += i * i;
-      }
-      const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-      const intercept = (sumY - slope * sumX) / n;
-      const trend = newArt.map((_, i) => Math.round(slope * i + intercept));
+      // 3-month moving average
+      const window = 3;
+      const trend = newArt.map((v, i) => {
+        if (i < window - 1) return null;
+        let sum = 0;
+        for (let j = i - window + 1; j <= i; j++) sum += newArt[j];
+        return Math.round(sum / window);
+      });
 
       const markLines = milestones
         .filter(m => months.includes(m.month))
@@ -188,9 +187,10 @@ function update() {
           markLine: { symbol: 'none', data: markLines, silent: true },
           barMaxWidth: 30,
         }, {
-          name: 'Trend',
+          name: '3-month trend',
           type: 'line',
           data: trend,
+          smooth: true,
           symbol: 'none',
           lineStyle: { color: '#f59e0b', width: 2 },
           z: 10,
