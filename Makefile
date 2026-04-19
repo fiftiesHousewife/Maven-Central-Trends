@@ -1,4 +1,4 @@
-.PHONY: build run test lint clean
+.PHONY: build run test lint clean export
 
 build:
 	go build -o bin/server ./cmd/server
@@ -12,5 +12,8 @@ test:
 lint:
 	golangci-lint run
 
+export:
+	go run ./cmd/export docs/site
+
 clean:
-	rm -rf bin/
+	rm -rf bin/ docs/site/

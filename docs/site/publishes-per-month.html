@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maven Central — New Groups By Prefix</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+  p#status { color: #94a3b8; font-size: 0.9rem; margin-bottom: 1rem; }
+  .chart-wrap { position: relative; width: 100%; max-width: 1200px; margin: 0 auto; }
+  #chart { width: 100%; height: 550px; }
+</style>
+</head>
+<body>
+<div class="chart-wrap">
+  <h1>New Groups Per Month By Prefix</h1>
+  <p id="status">Loading data...</p>
+  <div id="chart"></div>
+</div>
+<script>
+const chart = echarts.init(document.getElementById('chart'), 'dark');
+
+const palette = [
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6',
+  '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1',
+  '#14b8a6', '#e879f9',
+];
+
+function update() {
+  fetch('/api/groups-by-prefix.json')
+    .then(r => {
+      if (r.status === 503) throw new Error('not ready');
+      return r.json();
+    })
+    .then(data => {
+      if (!data || data.length === 0) throw new Error('empty');
+
+      // Aggregate totals per prefix across all months
+      const totals = {};
+      data.forEach(m => {
+        Object.entries(m.prefixes).forEach(([p, cnt]) => {
+          totals[p] = (totals[p] || 0) + cnt;
+        });
+      });
+
+      // Top 10 prefixes, rest as Other
+      const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+      const topN = 10;
+      const topPrefixes = sorted.slice(0, topN).map(e => e[0]);
+      const topSet = new Set(topPrefixes);
+
+      const months = data.map(m => m.month);
+
+      const seriesData = {};
+      topPrefixes.forEach(p => { seriesData[p] = []; });
+      seriesData['Other'] = [];
+
+      data.forEach(m => {
+        let otherCount = 0;
+        topPrefixes.forEach(p => {
+          seriesData[p].push(m.prefixes[p] || 0);
+        });
+        Object.entries(m.prefixes).forEach(([p, cnt]) => {
+          if (!topSet.has(p)) otherCount += cnt;
+        });
+        seriesData['Other'].push(otherCount);
+      });
+
+      const allKeys = [...topPrefixes, 'Other'];
+      const series = allKeys.map((name, i) => ({
+        name: name + '.*',
+        type: 'line',
+        stack: 'prefixes',
+        areaStyle: { opacity: 0.7 },
+        data: seriesData[name],
+        itemStyle: { color: palette[i % palette.length] },
+        emphasis: { focus: 'series' },
+        symbol: 'none',
+        lineStyle: { width: 1 },
+      }));
+
+      const total = Object.values(totals).reduce((s, v) => s + v, 0);
+      document.getElementById('status').textContent =
+        total.toLocaleString() + ' groups across ' + sorted.length + ' prefixes';
+
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'cross' },
+        },
+        legend: {
+          show: true,
+          top: 5,
+          right: 20,
+          textStyle: { color: '#94a3b8', fontSize: 11 },
+        },
+        xAxis: {
+          type: 'category',
+          data: months,
+          boundaryGap: false,
+          axisLabel: { rotate: 45, color: '#64748b', fontSize: 11 },
+          axisLine: { lineStyle: { color: '#1e293b' } },
+        },
+        yAxis: {
+          type: 'value',
+          axisLabel: { color: '#64748b' },
+          splitLine: { lineStyle: { color: '#1e293b' } },
+        },
+        series: series,
+        grid: { top: 50, bottom: 60, left: 50, right: 20 },
+      });
+
+      ;
+    })
+    .catch(() => {
+      document.getElementById('status').textContent = 'Waiting for data...';
+      ;
+    });
+}
+
+update();
+window.addEventListener('resize', () => chart.resize());
+</script>
+</body>
+</html>
