@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -342,6 +343,79 @@ func TotalGroups() int {
 		slog.Error("TotalGroups query failed", "error", err)
 	}
 	return n
+}
+
+// NewGroupsPerMonthFiltered returns new group counts, optionally filtering to
+// "truly new" namespaces. A group is "truly new" if it's a 2-level group (top-level
+// namespace like io.netty), OR if its 2-level parent was first published in the
+// same month (i.e. the whole namespace is new, not just a subgroup of an existing one).
+func NewGroupsPerMonthFiltered(newOnly bool) ([]MonthCount, error) {
+	if !newOnly {
+		return NewGroupsPerMonth()
+	}
+
+	// Build a map of 2-level parent -> earliest publish month
+	parentMonths := make(map[string]string)
+	rows, err := db.Query(`SELECT group_id, substr(first_published, 1, 7) FROM groups WHERE first_published != ''`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var gid, month string
+		rows.Scan(&gid, &month)
+		// Extract 2-level parent: com.google.cloud -> com.google
+		parts := splitGroupID(gid)
+		if len(parts) >= 2 {
+			parent := parts[0] + "." + parts[1]
+			if existing, ok := parentMonths[parent]; !ok || month < existing {
+				parentMonths[parent] = month
+			}
+		}
+	}
+	rows.Close()
+
+	// Now count groups where the 2-level parent was first published in the same month
+	rows2, err := db.Query(`SELECT group_id, substr(first_published, 1, 7) FROM groups WHERE first_published != '' ORDER BY first_published`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows2.Close()
+
+	monthlyCounts := make(map[string]int)
+	for rows2.Next() {
+		var gid, month string
+		rows2.Scan(&gid, &month)
+		parts := splitGroupID(gid)
+		if len(parts) < 2 {
+			continue
+		}
+		parent := parts[0] + "." + parts[1]
+		parentMonth := parentMonths[parent]
+		// Truly new: 2-level group itself, or parent appeared same month
+		if len(parts) == 2 || parentMonth == month {
+			monthlyCounts[month]++
+		}
+	}
+
+	var result []MonthCount
+	for month, cnt := range monthlyCounts {
+		result = append(result, MonthCount{Month: month, NewGroups: cnt})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Month < result[j].Month })
+	return result, nil
+}
+
+func splitGroupID(gid string) []string {
+	var parts []string
+	start := 0
+	for i, c := range gid {
+		if c == '.' {
+			parts = append(parts, gid[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, gid[start:])
+	return parts
 }
 
 // AllGroupIDs returns all group IDs in the database.

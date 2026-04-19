@@ -16,6 +16,14 @@ const newChartHTML2 = `<!DOCTYPE html>
   h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   p#status { color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.25rem; }
   p#scan-progress { color: #475569; font-size: 0.75rem; margin-bottom: 1rem; }
+  .toggle-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .toggle-btn {
+    padding: 0.35rem 0.8rem; border-radius: 4px; border: 1px solid #334155;
+    background: #1e293b; color: #94a3b8; font-size: 0.8rem; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .toggle-btn:hover { border-color: #3b82f6; color: #e2e8f0; }
+  .toggle-btn.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
   .chart-wrap { position: relative; width: 100%; max-width: 1200px; margin: 0 auto; }
   #chart { width: 100%; height: 550px; }
   #groups-panel {
@@ -81,6 +89,10 @@ const newChartHTML2 = `<!DOCTYPE html>
   <h1>New Maven Central Groups Created Per Month</h1>
   <p id="status">Loading data… scanning Maven Central namespaces.</p>
   <p id="scan-progress"></p>
+  <div class="toggle-bar">
+    <button class="toggle-btn active" id="btn-all" onclick="setFilter('all')">All new groups</button>
+    <button class="toggle-btn" id="btn-new" onclick="setFilter('new')">Truly new namespaces only</button>
+  </div>
   <div id="chart"></div>
 </div>
 <div id="groups-panel">
@@ -304,8 +316,18 @@ chart.on('click', function(params) {
   }
 });
 
+let currentFilter = 'all';
+
+function setFilter(f) {
+  currentFilter = f;
+  document.getElementById('btn-all').className = 'toggle-btn' + (f === 'all' ? ' active' : '');
+  document.getElementById('btn-new').className = 'toggle-btn' + (f === 'new' ? ' active' : '');
+  update();
+}
+
 function update() {
-  fetch('/api/new-groups')
+  const filterParam = currentFilter === 'new' ? '?filter=new' : '';
+  fetch('/api/new-groups' + filterParam)
     .then(r => {
       if (r.status === 503) throw new Error('still fetching');
       return r.json();
