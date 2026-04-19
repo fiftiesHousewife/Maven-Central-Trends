@@ -44,7 +44,8 @@ func LicenseTrends(w http.ResponseWriter, r *http.Request) {
 
 // OneAndDone returns one-version vs multi-version group counts per month.
 func OneAndDone(w http.ResponseWriter, r *http.Request) {
-	data, err := store.OneAndDoneByMonth()
+	filter := r.URL.Query().Get("filter")
+	data, err := store.OneAndDoneByMonth(filter)
 	if err != nil || len(data) == 0 {
 		http.Error(w, "enrichment data not yet available", http.StatusServiceUnavailable)
 		return

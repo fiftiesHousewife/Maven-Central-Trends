@@ -394,11 +394,8 @@ function update() {
         return Math.round(sum / window);
       });
 
-      // Fetch one-and-done data to split bars — only for 'all' view
-      const oadPromise = currentFilter === 'all'
-        ? fetch('/api/one-and-done').then(r => r.ok ? r.json() : null)
-        : Promise.resolve(null);
-      oadPromise.then(oad => {
+      // Fetch one-and-done data with the same filter
+      fetch('/api/one-and-done' + filterParam).then(r => r.ok ? r.json() : null).then(oad => {
         let series, tooltipFmt;
 
         if (oad && oad.length > 0) {

@@ -533,31 +533,106 @@ type OneAndDoneStat struct {
 }
 
 // OneAndDoneByMonth returns the count of single-version vs multi-version groups per month.
-// Only includes groups where enriched_depsdev = 1 (so total_versions is meaningful).
-func OneAndDoneByMonth() ([]OneAndDoneStat, error) {
+// Accepts a filter: "new" for truly new namespaces, "extensions" for subgroups, "" for all.
+func OneAndDoneByMonth(filter string) ([]OneAndDoneStat, error) {
+	if filter != "new" && filter != "extensions" {
+		// Fast path: no filtering needed
+		rows, err := db.Query(`
+			SELECT substr(first_published, 1, 7) AS month,
+				SUM(CASE WHEN total_versions <= 1 THEN 1 ELSE 0 END) AS one_ver,
+				SUM(CASE WHEN total_versions > 1 THEN 1 ELSE 0 END) AS multi,
+				COUNT(*) AS total
+			FROM groups
+			WHERE enriched_depsdev = 1 AND first_published != ''
+			GROUP BY month
+			ORDER BY month`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var result []OneAndDoneStat
+		for rows.Next() {
+			var s OneAndDoneStat
+			if err := rows.Scan(&s.Month, &s.OneVersion, &s.Multiple, &s.Total); err != nil {
+				return nil, err
+			}
+			result = append(result, s)
+		}
+		return result, rows.Err()
+	}
+
+	// Filtered path: compute parent months, then filter
+	parentMonths := make(map[string]string)
+	pRows, err := db.Query(`SELECT group_id, substr(first_published, 1, 7) FROM groups WHERE first_published != ''`)
+	if err != nil {
+		return nil, err
+	}
+	for pRows.Next() {
+		var gid, month string
+		pRows.Scan(&gid, &month)
+		parts := splitGroupID(gid)
+		if len(parts) >= 2 {
+			parent := parts[0] + "." + parts[1]
+			if existing, ok := parentMonths[parent]; !ok || month < existing {
+				parentMonths[parent] = month
+			}
+		}
+	}
+	pRows.Close()
+
 	rows, err := db.Query(`
-		SELECT substr(first_published, 1, 7) AS month,
-			SUM(CASE WHEN total_versions <= 1 THEN 1 ELSE 0 END) AS one_ver,
-			SUM(CASE WHEN total_versions > 1 THEN 1 ELSE 0 END) AS multi,
-			COUNT(*) AS total
+		SELECT group_id, substr(first_published, 1, 7) AS month, total_versions
 		FROM groups
-		WHERE enriched_depsdev = 1 AND first_published != ''
-		GROUP BY month
-		ORDER BY month`)
+		WHERE enriched_depsdev = 1 AND first_published != ''`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var result []OneAndDoneStat
+	type monthData struct{ one, multi int }
+	monthly := make(map[string]*monthData)
+
 	for rows.Next() {
-		var s OneAndDoneStat
-		if err := rows.Scan(&s.Month, &s.OneVersion, &s.Multiple, &s.Total); err != nil {
+		var gid, month string
+		var totalVersions int
+		if err := rows.Scan(&gid, &month, &totalVersions); err != nil {
 			return nil, err
 		}
-		result = append(result, s)
+		parts := splitGroupID(gid)
+		if len(parts) < 2 {
+			continue
+		}
+		parent := parts[0] + "." + parts[1]
+		parentMonth := parentMonths[parent]
+		isNew := len(parts) == 2 || parentMonth == month
+
+		include := (filter == "new" && isNew) || (filter == "extensions" && !isNew)
+		if !include {
+			continue
+		}
+
+		if monthly[month] == nil {
+			monthly[month] = &monthData{}
+		}
+		if totalVersions <= 1 {
+			monthly[month].one++
+		} else {
+			monthly[month].multi++
+		}
 	}
-	return result, rows.Err()
+	rows.Close()
+
+	var result []OneAndDoneStat
+	for month, d := range monthly {
+		result = append(result, OneAndDoneStat{
+			Month:      month,
+			OneVersion: d.one,
+			Multiple:   d.multi,
+			Total:      d.one + d.multi,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Month < result[j].Month })
+	return result, nil
 }
 
 // GrowthStat holds per-month artifact counts for cumulative growth.

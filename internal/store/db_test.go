@@ -279,7 +279,7 @@ func TestOneAndDoneByMonth(t *testing.T) {
 	UpsertGroup(Group{GroupID: "com.three", FirstPublished: "2024-03-20", FirstArtifact: "th", TotalVersions: 1, EnrichedDepsDev: true})
 	UpsertGroup(Group{GroupID: "com.four", FirstPublished: "2024-04-01", FirstArtifact: "f", TotalVersions: 10, EnrichedDepsDev: true})
 
-	data, err := OneAndDoneByMonth()
+	data, err := OneAndDoneByMonth("")
 	if err != nil {
 		t.Fatalf("OneAndDoneByMonth: %v", err)
 	}
