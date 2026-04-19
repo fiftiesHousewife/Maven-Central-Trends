@@ -17,9 +17,29 @@ Maven Central group creation has **accelerated sharply** since mid-2024, but the
 
 Two signals emerge:
 
-1. **Existing projects are more productive.** Extensions of existing namespaces — established organisations adding subgroups — grew from 271/month to 366/month, a **35% increase**. These are teams like Google, Apache, and Eclipse shipping more sub-projects. AI tools are plausibly helping them ship faster.
+1. **Existing projects are more productive.** Extensions of existing namespaces — established organisations adding subgroups — grew from 271/month to 366/month, a **35% increase**. These are teams like Google, Apache, and Eclipse shipping more sub-projects.
 
-2. **New entrants are surging.** Truly new namespaces — first-time publishers to Maven Central — grew from 165/month to 247/month, a **50% increase**. The acceleration is concentrated in late 2024 and 2025, coinciding with the maturation of AI coding assistants (Cursor, Claude Code, Windsurf).
+2. **New entrants are surging.** Truly new namespaces — first-time publishers to Maven Central — grew from 165/month to 247/month, a **50% increase**.
+
+### When did the acceleration actually happen?
+
+The monthly truly-new counts tell a nuanced story:
+
+| Period | Monthly truly new | Change |
+|--------|:-:|:-:|
+| Jun 2023 | 148 | baseline |
+| Dec 2023 | 161 | +9% |
+| Jun 2024 | 145 | flat |
+| Dec 2024 | 208 | **+40%** |
+| Jun 2025 | 267 | **+80%** |
+| Dec 2025 | 230 | +55% |
+| Mar 2026 | 489 | **+230%** |
+
+**2024 was not a step change.** Despite the launch of Claude 3 (March), GPT-4o (May), Claude 3.5 Sonnet (June), and Cursor (August), the monthly new namespace count stayed flat through mid-2024 (~145-165/month). The real acceleration began in late 2024 and exploded in 2025-2026.
+
+This lag makes sense: AI coding tools don't instantly create Maven Central publishers. Developers first use them for existing projects, then build confidence, then start new projects, then figure out Maven publishing. The 6-12 month delay between tool availability and publishing surge is consistent with this adoption curve.
+
+It's also possible the growth has nothing to do with AI tools at all — it could reflect JitPack's growing adoption, changes to Maven Central publishing requirements, or other ecosystem shifts. **Correlation is not causation**, and we cannot attribute the growth to AI tools from this data alone.
 
 ## Where the new groups come from
 
@@ -57,14 +77,16 @@ The one-and-done rate has risen from 26% to 33%. This tracks with the democratis
 
 ## Are groups getting smaller?
 
-| Era | Avg artifacts/group | Avg versions |
-|-----|:-:|:-:|
-| Pre-GPT-4 | 8.0 | 12.0 |
-| GPT-4 year | 9.1 | 11.1 |
-| Claude 3 + Cursor | 10.2 | 8.4 |
-| Claude 4+ | 9.3 | 6.6 |
+| Era | Avg artifacts | Avg versions | Groups (12+ months old) | Avg versions (age-controlled) |
+|-----|:-:|:-:|:-:|:-:|
+| Pre-GPT-4 | 7.6 | 12.0 | 4,810 | 12.0 |
+| GPT-4 year | 8.6 | 11.1 | 5,106 | 11.2 |
+| Claude 3 + Cursor | 9.7 | 8.4 | 5,985 | 8.4 |
+| Claude 4+ | 9.3 | 6.6 | (too recent) | — |
 
-Average artifacts per group has been stable (~9), but **average versions is falling** — from 12.0 down to 6.6. Newer groups are publishing fewer versions, consistent with the one-and-done trend. Established-era groups had more time to iterate; AI-era groups are newer but also less actively maintained.
+Average artifacts per group is slightly increasing (~8 to ~10), but **average versions is falling**. 
+
+**Important caveat on versions**: The Claude 4+ era shows only 6.6 average versions, but these groups are less than 12 months old — they simply haven't had time to publish many versions yet. However, even when controlling for age (comparing only groups 12+ months old), post-2024 groups average 8.4 versions vs 12.0 for pre-GPT-4 groups of similar age. **The decline is real, not just an artefact of recency.** Possible explanations: more experimental/one-off projects, faster iteration meaning fewer but larger releases, or a genuine shift in maintenance patterns.
 
 ## License trends
 
