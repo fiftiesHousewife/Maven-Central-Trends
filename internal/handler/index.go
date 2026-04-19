@@ -65,7 +65,7 @@ const indexHTML = `<!DOCTYPE html>
 
   <a class="card" href="/version-trends">
     <h2>Versions Per Month</h2>
-    <p>Total versions from deps.dev enrichment, bucketed by group creation month. Outlier groups capped at 500 versions. Click any bar to explore.</p>
+    <p>Total versions held by groups created each month. Recent months appear lower as newer groups have had less time to publish. Click any bar to explore.</p>
   </a>
 
   <h3>Security &amp; Quality</h3>
