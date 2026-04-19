@@ -4,7 +4,7 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/badge/License-ISC-blue)](LICENSE)
 
-A Go service that tracks ~74,000 Maven Central namespaces to measure how AI coding tools affect library creation, quality, and community growth. 10 interactive charts with drill-down, powered by data from repo1.maven.org, deps.dev, OSV, Sonatype Central Portal, and GitHub.
+A Go service that tracks ~75,000 Maven Central namespaces (2-8 levels deep) to measure how AI coding tools affect library creation, quality, and community growth. 10 interactive charts with hierarchical drill-down and filter toggles. Data from repo1.maven.org, deps.dev, OSV, Sonatype Central Portal, and GitHub.
 
 **[Read the insights](INSIGHTS.md)** — analysis of Maven Central trends in the age of AI.
 
@@ -18,7 +18,7 @@ All charts use ECharts with a dark theme, AI tool milestone annotations (Copilot
 
 | # | Chart | Route | What it shows |
 |---|-------|-------|---------------|
-| 1 | **New Groups Per Month** | `/new-groups-per-month` | New namespaces each month, stacked into one-and-done (red) vs active (blue). Click any bar to explore groups |
+| 1 | **New Groups Per Month** | `/new-groups-per-month` | New namespaces each month with one-and-done overlay. Toggle: All / Truly New / Extensions. Hierarchical drill-down |
 | 2 | **New Groups By Prefix** | `/publishes-per-month` | Stacked area breaking down new groups by top-level prefix (com, org, io, dev, ai, etc.). Top 10 + Other |
 | 3 | **License Trends** | `/license-trends` | License distribution per month. Top 8 licenses stacked, click any segment to filter |
 | 4 | **Artifacts Per Month** | `/artifact-trends` | New artifacts across all groups with a linear trend line. Outliers capped at 500 |
@@ -68,11 +68,11 @@ GITHUB_TOKEN=$(gh auth token) ./bin/server
 
 The server starts on `:8080` (override with `PORT`). Set `LOG_LEVEL=debug` for verbose logging.
 
-On first run, the server discovers ~28,000 Maven Central namespaces through a two-phase scan:
-1. **Initial scan**: Enumerates 26 top-level prefixes on repo1, discovering ~19,000 two-level groups
-2. **Deep scan**: Recurses into each group to find 3+ level namespaces (e.g. `com.fasterxml.jackson.core`), discovering ~9,000 more
+On first run, the server discovers ~75,000 Maven Central namespaces through a two-phase scan:
+1. **Initial scan**: Enumerates 26 top-level prefixes on repo1, discovering two-level groups. Pure namespace groups (like `org.apache`) are registered even without direct artifacts
+2. **Deep scan**: Recurses into each group to find 3-8 level namespaces (e.g. `com.fasterxml.jackson.core`), looping until convergence. Skips entries with hyphens (artifact names, not namespace components). Completion is persisted so restarts skip it
 
-Subsequent runs resume from stored data via prefix-level checkpointing.
+Subsequent runs resume from stored data. Run `make export` to generate a static site for GitHub Pages.
 
 ## Testing
 
@@ -93,7 +93,8 @@ SQLite database at `data/maven.db` (WAL mode, single connection).
 
 | Table | Purpose |
 |-------|---------|
-| `groups` | ~28,000 Maven Central namespaces with enrichment data (license, CVEs, contributors, popularity) |
+| `groups` | ~75,000 Maven Central namespaces with enrichment data (license, CVEs, contributors, popularity) |
+| `monthly_activity` | Version publish counts by actual publish month (from deps.dev) |
 | `contributors` | Per-group contributor list from GitHub |
 | `scan_progress` | Completed prefix scans for resume support |
 
@@ -105,7 +106,7 @@ Two goroutines start on boot:
 2. **Enrichment pipeline** — Runs sequentially after scan completes:
    - **Deep scan**: Discover 3+ level groupIds by recursing into existing groups
    - **deps.dev detail**: Fetch license, source repo, total version count (100ms throttle)
-   - **OSV CVEs**: Query api.osv.dev across up to 5 artifacts per group (100ms throttle)
+   - **OSV CVEs**: Batch-query api.osv.dev for ALL artifacts per group (100 per batch request)
    - **Central Portal**: Fetch popularity metrics (3s throttle, 60s backoff on 429)
    - **GitHub**: Fetch contributor lists and account ages (1.2s throttle, requires `GITHUB_TOKEN`)
 
@@ -133,6 +134,20 @@ The scanner:
 ### Partial month handling
 
 The current month is excluded from all charts unless it's the 30th or 31st, to avoid misleadingly low bars for incomplete months.
+
+## Static Site / GitHub Pages
+
+Export a fully interactive static site with baked-in data:
+
+```bash
+make export              # generates docs/site/
+```
+
+All 10 charts work offline — API data is pre-exported as JSON files. Deploy to GitHub Pages via the `Deploy to GitHub Pages` workflow (Actions > Run workflow), or serve locally:
+
+```bash
+cd docs/site && python3 -m http.server 8081
+```
 
 ## Other Approaches Attempted
 
