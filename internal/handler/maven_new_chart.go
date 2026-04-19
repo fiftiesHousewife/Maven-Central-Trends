@@ -330,7 +330,7 @@ function setFilter(f) {
 }
 
 function update() {
-  const filterParam = currentFilter === 'new' ? '?filter=new' : '';
+  const filterParam = currentFilter !== 'all' ? '?filter=' + currentFilter : '';
   fetch('/api/new-groups' + filterParam)
     .then(r => {
       if (r.status === 503) throw new Error('still fetching');
@@ -549,5 +549,6 @@ window.addEventListener('resize', () => chart.resize());
 
 func NewChart2(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Write([]byte(newChartHTML2))
 }
