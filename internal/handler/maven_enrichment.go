@@ -212,47 +212,55 @@ func enrichWithDepsDevDetail() {
 		return
 	}
 
-	total := len(unenriched)
+	// Skip namespace-only groups immediately
+	var toEnrich []store.Group
+	for _, g := range unenriched {
+		if g.FirstArtifact == "" {
+			store.UpdateDepsDevEnrichment(g.GroupID, 0, "", "")
+		} else {
+			toEnrich = append(toEnrich, g)
+		}
+	}
+
+	total := len(toEnrich)
 	scanStatus.mu.Lock()
 	scanStatus.EnrichmentPhase = "deps.dev detail"
 	scanStatus.EnrichmentTotal = total
 	scanStatus.EnrichmentDone = 0
 	scanStatus.mu.Unlock()
 
-	slog.Info("deps.dev detail enrichment starting", "unenriched", total)
+	slog.Info("deps.dev detail enrichment starting", "total", total)
 
 	enriched := 0
-	for i, g := range unenriched {
-		if g.FirstArtifact == "" {
-			continue
-		}
-
+	for i, g := range toEnrich {
 		pkg := fmt.Sprintf("%s:%s", g.GroupID, g.FirstArtifact)
 		u := fmt.Sprintf("%s/systems/maven/packages/%s",
 			depsDevBaseURL, urlEncode(pkg))
 
 		resp, err := httpClient.Get(u)
 		if err != nil {
-			time.Sleep(200 * time.Millisecond)
+			store.UpdateDepsDevEnrichment(g.GroupID, 0, g.License, g.SourceRepo)
+			scanStatus.incEnrichment()
 			continue
 		}
 
 		if resp.StatusCode != 200 {
 			resp.Body.Close()
-			time.Sleep(100 * time.Millisecond)
+			store.UpdateDepsDevEnrichment(g.GroupID, 0, g.License, g.SourceRepo)
+			scanStatus.incEnrichment()
 			continue
 		}
 
 		var result depsDevResponse
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			resp.Body.Close()
+			store.UpdateDepsDevEnrichment(g.GroupID, 0, g.License, g.SourceRepo)
+			scanStatus.incEnrichment()
 			continue
 		}
 		resp.Body.Close()
 
 		totalVersions := len(result.Versions)
-		license := ""
-		sourceRepo := ""
 
 		// Record version publish dates by month
 		monthCounts := make(map[string]int)
@@ -265,7 +273,10 @@ func enrichWithDepsDevDetail() {
 			store.AddMonthlyVersions(month, count)
 		}
 
-		if len(result.Versions) > 0 {
+		// Only fetch version detail if we don't already have license/source_repo
+		license := g.License
+		sourceRepo := g.SourceRepo
+		if license == "" && len(result.Versions) > 0 {
 			latest := result.Versions[len(result.Versions)-1]
 			if latest.VersionKey.Version != "" {
 				detail, err := fetchVersionDetail(g.GroupID, g.FirstArtifact, latest.VersionKey.Version)
@@ -278,23 +289,19 @@ func enrichWithDepsDevDetail() {
 			}
 		}
 
-		if err := store.UpdateDepsDevEnrichment(g.GroupID, totalVersions, license, sourceRepo); err != nil {
-			slog.Warn("failed to update depsdev enrichment", "group", g.GroupID, "error", err)
-		}
+		store.UpdateDepsDevEnrichment(g.GroupID, totalVersions, license, sourceRepo)
 		enriched++
 
 		scanStatus.mu.Lock()
 		scanStatus.EnrichmentDone = i + 1
 		scanStatus.mu.Unlock()
 
-		if (i+1)%100 == 0 {
-			slog.Info("deps.dev detail progress", "done", i+1, "of", total, "enriched", enriched)
+		if (i+1)%500 == 0 {
+			slog.Info("deps.dev progress", "done", i+1, "of", total, "enriched", enriched)
 		}
-
-		time.Sleep(100 * time.Millisecond)
 	}
 
-	slog.Info("deps.dev detail enrichment complete", "total", total, "enriched", enriched)
+	slog.Info("deps.dev enrichment complete", "total", total, "enriched", enriched)
 }
 
 func enrichWithOSV() {

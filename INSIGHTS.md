@@ -1,6 +1,6 @@
 # Insights: Maven Central in the Age of AI
 
-Analysis of ~74,000 Maven Central namespaces tracked from April 2022 to March 2026, spanning the introduction of GitHub Copilot, GPT-4, Claude, Cursor, and other AI coding tools.
+Analysis of ~75,000 Maven Central namespaces (2-8 levels deep) tracked from April 2022 to March 2026, spanning the introduction of GitHub Copilot, GPT-4, Claude, Cursor, and other AI coding tools.
 
 ## The headline numbers
 
@@ -109,7 +109,7 @@ Source repository linkage has remained remarkably stable at **~96%** across all 
 
 ## Security
 
-Of 44,768 OSV-enriched groups, **397 (0.9%) have known CVEs**. The rate is low because most CVEs affect a small number of widely-used packages. The top vulnerable groups account for a disproportionate share:
+Of ~75,000 OSV-enriched groups, **702 (0.9%) have known CVEs**. The batch OSV API queries all artifacts per group, catching vulnerabilities that single-artifact scans miss. CVEs are concentrated in widely-used packages:
 
 | Group | CVEs | Severity |
 |-------|:-:|---------|
@@ -131,7 +131,7 @@ An open question: are AI-era groups more or less likely to depend on vulnerable 
 ## Methodology
 
 - **Data source**: repo1.maven.org for enumeration, deps.dev for version history and metadata, OSV for CVEs, Sonatype Central Portal for popularity
-- **Coverage**: 74,461 groups across 26 top-level prefixes, scanned to 8 levels deep
+- **Coverage**: ~75,000 groups across 26 top-level prefixes, scanned to 8 levels deep
 - **Time range**: April 2022 — March 2026 (48 months)
 - **"Truly new" definition**: A group whose 2-level parent (e.g. `com.example`) was first published in the same month — meaning the whole namespace is new, not a subgroup of an established project
 - **"One-and-done" definition**: A group whose primary artifact has total_versions <= 1 from deps.dev

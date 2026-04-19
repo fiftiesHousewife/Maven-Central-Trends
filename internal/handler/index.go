@@ -61,13 +61,6 @@ const indexHTML = `<!DOCTYPE html>
     <p>New artifacts added to Maven Central each month across all groups, with a linear trend line. Outlier groups (500+ artifacts) are capped. Click any bar for details.</p>
   </a>
 
-  <h3>Versions</h3>
-
-  <a class="card" href="/version-trends">
-    <h2>Versions Per Month</h2>
-    <p>Total versions held by groups created each month. Recent months appear lower as newer groups have had less time to publish. Click any bar to explore.</p>
-  </a>
-
   <h3>Security &amp; Quality</h3>
 
   <a class="card" href="/cve-trends">
